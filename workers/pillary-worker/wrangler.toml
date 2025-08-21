@@ -1,13 +1,15 @@
 name = "pillary-worker"
 main = "src/index.ts"
-compatibility_date = "2025-08-01"
+compatibility_date = "2025-08-21"
+
 routes = [
   { pattern = "inpinity.online/pillary/api/*", zone_name = "inpinity.online" }
 ]
+
 [vars]
-# >>> Deine Konfiguration (hier oder per Dashboard Secrets)
-JSON_BASE_CID = "bafybeibjqtwncnrsv4vtcnrqcck3bgecu3pfip7mwu4pcdenre5b7am7tu"         # z.B. .../0.json,1.json,...
-IPFS_GATEWAYS = "https://ipfs.io,https://cloudflare-ipfs.com,https://ipfs.inpinity.online"
+# Trage DEINE Werte ein oder setze sie später als Secrets/Vars im Dashboard.
+JSON_BASE_CID = "bafybeibjqtwncnrsv4vtcnrqcck3bgecu3pfip7mwu4pcdenre5b7am7tu"  # Ordner mit 0.json..9999.json
+IPFS_GATEWAYS = "https://cloudflare-ipfs.com,https://ipfs.io,https://ipfs.inpinity.online"
 COLLECTION_MINT = "6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"
 CREATOR = "GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp"
 RPC = "https://api.mainnet-beta.solana.com"
