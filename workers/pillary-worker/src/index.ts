@@ -172,7 +172,25 @@ export default {
         headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", ...CORS },
       });
     }
+    // Proxy für statische Pages unter /pillary (alles außer /pillary/api/*)
+if (pathname.startsWith("/pillary") && !pathname.startsWith("/pillary/api/")) {
+  // Ziel: deine Pages-Instanz
+  const host = (env as any).PAGES_HOST || "gallary-loader-inpinity.pages.dev";
+  const targetUrl = new URL(`https://${host}${pathname.replace(/^\/pillary/, "") || "/"}`);
+  targetUrl.search = url.search; // Query durchreichen
 
+  const resp = await fetch(targetUrl.toString(), {
+    method: request.method,
+    headers: request.headers,
+    body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.blob().catch(()=>undefined),
+    cf: { cacheEverything: true },
+  });
+
+  // CORS/Cache-Header nur bei HTML/JS/CSS anfassen, nicht bei binary
+  const out = new Response(resp.body, resp);
+  out.headers.set("cache-control", resp.headers.get("cache-control") || "public, max-age=300");
+  return out;
+}
     return notFound();
   },
 } satisfies ExportedHandler<Env>;
