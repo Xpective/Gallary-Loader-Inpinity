@@ -1,15 +1,15 @@
 name = "pillary-worker"
 main = "src/index.ts"
 compatibility_date = "2025-08-21"
-# workers/pillary-worker/wrangler.toml
+
 routes = [
   { pattern = "inpinity.online/pillary/api/*", zone_name = "inpinity.online" },
-  { pattern = "inpinity.online/pillary*", zone_name = "inpinity.online" }   # ← NEU
+  { pattern = "inpinity.online/pillary*", zone_name = "inpinity.online" }
 ]
 
 [vars]
-PAGES_HOST = "gallary-loader-inpinity.pages.dev"   # ← NEU (deine Pages-Host)
-# Trage DEINE Werte ein oder setze sie später als Secrets/Vars im Dashboard.
+# <-- WICHTIG: Werte anpassen (oder im Dashboard setzen)
+PAGES_HOST = "gallary-loader-inpinity.pages.dev"
 JSON_BASE_CID = "bafybeibjqtwncnrsv4vtcnrqcck3bgecu3pfip7mwu4pcdenre5b7am7tu"  # Ordner mit 0.json..9999.json
 IPFS_GATEWAYS = "https://cloudflare-ipfs.com,https://ipfs.io,https://ipfs.inpinity.online"
 COLLECTION_MINT = "6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"

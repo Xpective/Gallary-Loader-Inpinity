@@ -4,6 +4,7 @@ export interface Env {
   COLLECTION_MINT: string;
   CREATOR: string;
   RPC: string;
+  PAGES_HOST: string;
 }
 
 const CORS = {
@@ -12,19 +13,19 @@ const CORS = {
   "access-control-allow-headers": "content-type",
 };
 
-const ok = (data: unknown, headers: Record<string, string> = {}) =>
+const ok = (data: unknown, headers: Record<string,string> = {}) =>
   new Response(JSON.stringify(data), {
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "public, max-age=60, stale-while-revalidate=600",
-      ...CORS, ...headers,
-    },
+      ...CORS, ...headers
+    }
   });
 
 const notFound = () => new Response("Not found", { status: 404, headers: CORS });
 
 function gateways(env: Env) {
-  return env.IPFS_GATEWAYS.split(",").map(s=>s.trim()).filter(Boolean);
+  return (env.IPFS_GATEWAYS || "").split(",").map(s => s.trim()).filter(Boolean);
 }
 
 async function fetchWithCache(req: Request, maxAge = 3600) {
@@ -51,7 +52,7 @@ async function fetchJsonFromCid(env: Env, path: string) {
   throw new Error("JSON not reachable");
 }
 
-function resolveIpfsUrl(env: Env, uri: string | undefined) {
+function resolveIpfsUrl(env: Env, uri?: string|null) {
   if (!uri) return null;
   if (uri.startsWith("ipfs://")) {
     const p = uri.replace("ipfs://", "");
@@ -119,48 +120,48 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const { pathname, searchParams } = url;
+
     if (request.method === "OPTIONS") return ok({ ok: true });
 
+    // API: Meta / Status / Batches
     if (/\/pillary\/api\/meta\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
       try { return ok(await metaByIndex(env, idx)); }
       catch (e:any) { return ok({ error: e.message }, { "cache-control": "no-store" }); }
     }
-
     if (/\/pillary\/api\/status\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
       return ok(await statusByIndex(env, idx));
     }
-
     if (pathname.endsWith("/pillary/api/batch/status")) {
       const from = parseInt(searchParams.get("from") ?? "0");
-      const to = parseInt(searchParams.get("to") ?? "299");
-      const jobs = Array.from({ length: to - from + 1 }, (_, i) => statusByIndex(env, from + i));
+      const to   = parseInt(searchParams.get("to") ?? "299");
+      const jobs = Array.from({length: to-from+1}, (_,i)=> statusByIndex(env, from+i));
       return ok({ from, to, data: await Promise.all(jobs) });
     }
-
     if (pathname.endsWith("/pillary/api/batch/meta")) {
       const from = parseInt(searchParams.get("from") ?? "0");
-      const to = parseInt(searchParams.get("to") ?? "49");
-      const jobs = Array.from({ length: to - from + 1 }, (_, i) => metaByIndex(env, from + i));
+      const to   = parseInt(searchParams.get("to") ?? "49");
+      const jobs = Array.from({length: to-from+1}, (_,i)=> metaByIndex(env, from+i));
       return ok({ from, to, data: await Promise.all(jobs) });
     }
 
+    // API: Video / Thumb
     if (/\/pillary\/api\/video\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
       return handleVideo(env, idx);
     }
-
     if (/\/pillary\/api\/thumb\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
       return handleThumb(env, idx);
     }
 
+    // API: Events (SSE)
     if (pathname.endsWith("/pillary/api/events")) {
       const stream = new ReadableStream({
         start: (controller) => {
           controller.enqueue(new TextEncoder().encode("retry: 5000\n\n"));
-          const iv = setInterval(() => sse(controller, { t: Date.now(), type: "heartbeat" }), 15000);
+          const iv = setInterval(()=> sse(controller, { t: Date.now(), type: "heartbeat" }), 15000);
           (controller as any)._iv = iv;
         },
         cancel: (reason) => {
@@ -172,25 +173,23 @@ export default {
         headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", ...CORS },
       });
     }
-    // Proxy für statische Pages unter /pillary (alles außer /pillary/api/*)
-if (pathname.startsWith("/pillary") && !pathname.startsWith("/pillary/api/")) {
-  // Ziel: deine Pages-Instanz
-  const host = (env as any).PAGES_HOST || "gallary-loader-inpinity.pages.dev";
-  const targetUrl = new URL(`https://${host}${pathname.replace(/^\/pillary/, "") || "/"}`);
-  targetUrl.search = url.search; // Query durchreichen
 
-  const resp = await fetch(targetUrl.toString(), {
-    method: request.method,
-    headers: request.headers,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.blob().catch(()=>undefined),
-    cf: { cacheEverything: true },
-  });
+    // STATIC: /pillary* → Pages proxy (alles Nicht-API)
+    if (pathname.startsWith("/pillary") && !pathname.startsWith("/pillary/api/")) {
+      const host = env.PAGES_HOST || "gallary-loader-inpinity.pages.dev";
+      const targetUrl = new URL(`https://${host}${pathname.replace(/^\/pillary/, "") || "/"}`);
+      targetUrl.search = url.search;
+      const resp = await fetch(targetUrl.toString(), {
+        method: request.method,
+        headers: request.headers,
+        body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.blob().catch(()=>undefined),
+        cf: { cacheEverything: true },
+      });
+      const out = new Response(resp.body, resp);
+      out.headers.set("cache-control", resp.headers.get("cache-control") || "public, max-age=300");
+      return out;
+    }
 
-  // CORS/Cache-Header nur bei HTML/JS/CSS anfassen, nicht bei binary
-  const out = new Response(resp.body, resp);
-  out.headers.set("cache-control", resp.headers.get("cache-control") || "public, max-age=300");
-  return out;
-}
     return notFound();
-  },
+  }
 } satisfies ExportedHandler<Env>;
