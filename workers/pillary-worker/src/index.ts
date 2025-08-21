@@ -176,19 +176,12 @@ export default {
 
     // STATIC: /pillary* → Pages proxy (alles Nicht-API)
     if (pathname.startsWith("/pillary") && !pathname.startsWith("/pillary/api/")) {
-      const host = env.PAGES_HOST || "gallary-loader-inpinity.pages.dev";
-      const targetUrl = new URL(`https://${host}${pathname.replace(/^\/pillary/, "") || "/"}`);
-      targetUrl.search = url.search;
-      const resp = await fetch(targetUrl.toString(), {
-        method: request.method,
-        headers: request.headers,
-        body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.blob().catch(()=>undefined),
-        cf: { cacheEverything: true },
-      });
-      const out = new Response(resp.body, resp);
-      out.headers.set("cache-control", resp.headers.get("cache-control") || "public, max-age=300");
-      return out;
-    }
+  const host = env.PAGES_HOST || "gallary-loader-inpinity.pages.dev";
+  const targetUrl = new URL(`https://${host}${pathname.replace(/^\/pillary/, "") || "/"}`);
+  targetUrl.search = url.search;
+  const resp = await fetch(targetUrl.toString(), { cf: { cacheEverything: true }});
+  return new Response(resp.body, resp);
+}
 
     return notFound();
   }
