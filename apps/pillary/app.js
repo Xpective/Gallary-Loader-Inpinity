@@ -1,13 +1,12 @@
-/* ================= CONFIG ================= */
 const CFG = {
   API: "/pillary/api",
-  ROWS: 100,                  // 1+3+5+... -> 10.000
+  ROWS: 100,
   TILE: 32,
   GAP: 4,
   PRELOAD_CONCURRENCY: 8,
-  RARITY_MIN: 0,              // erwartet rarity_score wenn vorhanden
+  RARITY_MIN: 0,
   RARITY_MAX: 100,
-  SCALE_IMG_THRESHOLD: 0.7,   // <0.7 nur Thumbs, >= Videos
+  SCALE_IMG_THRESHOLD: 0.7,
 };
 
 const stage = document.getElementById("stage");
@@ -25,31 +24,27 @@ const closeModal = document.getElementById("closeModal");
 
 let scale = 1;
 let focusedIndex = 0;
-
-/* ======= Pyramid math ======= */
-const TOTAL = CFG.ROWS * CFG.ROWS; // Sum of first N odds = N^2
+const TOTAL = CFG.ROWS * CFG.ROWS;
 
 function layoutPyramid() {
   let y = 0, index = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
-    const cols = 1 + row * 2; // 1,3,5,...
-    const xStart = 0;
-    let x = xStart;
+    const cols = 1 + row * 2;
+    let x = 0;
     for (let c = 0; c < cols; c++, index++) {
       const el = document.createElement("div");
       el.className = "tile";
       el.dataset.index = index;
-      el.tabIndex = 0; // a11y focusable
+      el.tabIndex = 0;
       el.title = `#${index}`;
       el.style.left = x + "px";
       el.style.top = y + "px";
       el.style.width = el.style.height = CFG.TILE + "px";
       el.addEventListener("click", onTileClick);
       el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") onTileClick({ currentTarget: el }); });
-      // thumb placeholder
       const img = document.createElement("img");
       img.alt = `#${index}`;
-      img.src = `${CFG.API}/thumb/${index}`; // leichte Vorschau
+      img.src = `${CFG.API}/thumb/${index}`;
       el.appendChild(img);
       stage.appendChild(el);
       x += CFG.TILE + CFG.GAP;
@@ -67,7 +62,6 @@ function setScale(s) {
   zoomLevel.textContent = Math.round(scale * 100) + "%";
   if ((prev < CFG.SCALE_IMG_THRESHOLD && scale >= CFG.SCALE_IMG_THRESHOLD) ||
       (prev >= CFG.SCALE_IMG_THRESHOLD && scale < CFG.SCALE_IMG_THRESHOLD)) {
-    // Qualität umschalten
     swapMediaForScale();
   }
 }
@@ -75,7 +69,7 @@ function setScale(s) {
 zoomInBtn.onclick  = () => setScale(scale + .1);
 zoomOutBtn.onclick = () => setScale(scale - .1);
 stageWrap.addEventListener("wheel", (e)=>{
-  if (!e.ctrlKey) return; // Pinch-zoom only
+  if (!e.ctrlKey) return;
   e.preventDefault();
   setScale(scale + (e.deltaY < 0 ? .1 : -.1));
 }, { passive: false });
@@ -83,7 +77,6 @@ stageWrap.addEventListener("wheel", (e)=>{
 closeModal.onclick = () => modal.classList.add("hidden");
 function showModal(html){ modalContent.innerHTML = html; modal.classList.remove("hidden"); }
 
-/* ========= API helpers ========= */
 const api = (p) => fetch(`${CFG.API}${p}`).then(r => r.json());
 
 async function loadStatusBatch(from, to) {
@@ -99,7 +92,6 @@ async function loadStatusBatch(from, to) {
 
 function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
 
-/* ========= Click → Modal ========= */
 async function onTileClick(e) {
   const el = e.currentTarget;
   const idx = parseInt(el.dataset.index);
@@ -136,14 +128,12 @@ async function onTileClick(e) {
   `);
 }
 
-/* ========= Adaptive Media: img vs video ========= */
 function swapMediaForScale() {
   const useVideo = scale >= CFG.SCALE_IMG_THRESHOLD;
   for (const el of stage.children) {
     const idx = parseInt(el.dataset.index);
     const hasVideo = el.querySelector("video");
     if (useVideo && !hasVideo) {
-      // ersetze img → video (aber nur, wenn Preload an oder in Nähe)
       const v = document.createElement("video");
       v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
       v.src = `${CFG.API}/video/${idx}`;
@@ -151,7 +141,6 @@ function swapMediaForScale() {
       el.appendChild(v);
       v.play().catch(()=>{});
     } else if (!useVideo && hasVideo) {
-      // ersetze video → thumb
       const img = document.createElement("img");
       img.alt = `#${idx}`;
       img.src = `${CFG.API}/thumb/${idx}`;
@@ -161,7 +150,6 @@ function swapMediaForScale() {
   }
 }
 
-/* ========= Video Preload Wave (alle) ========= */
 async function preloadAllVideos() {
   const conc = CFG.PRELOAD_CONCURRENCY;
   let next = 0;
@@ -186,25 +174,21 @@ async function preloadAllVideos() {
 }
 preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
-/* ========= Chunk-Prefetch (Nachbarreihen) ========= */
 let lastScrollY = 0;
 stageWrap.addEventListener("scroll", ()=> {
   const y = stageWrap.scrollTop / (scale || 1);
   if (Math.abs(y - lastScrollY) < 64) return;
   lastScrollY = y;
-  // überschlage aktuelle Reihe
   const rowHeight = CFG.TILE + CFG.GAP;
   const row = Math.floor(y / rowHeight);
   const windowRows = [row-2, row-1, row, row+1, row+2].filter(r => r>=0 && r<CFG.ROWS);
-  // Prefetch Metas (optional)
   windowRows.forEach(r=>{
-    const from = r*r;              // Beginn des Dreiecks: Summe der ersten r Reihen = r^2
+    const from = r*r;
     const to = from + (1 + r*2) - 1;
     api(`/batch/meta?from=${from}&to=${to}`).catch(()=>{});
   });
 }, { passive:true });
 
-/* ========= Jump & Focus Row ========= */
 function scrollToIndex(i, open = false) {
   const t = tile(i); if (!t) return;
   stageWrap.scrollTo({ left: t.offsetLeft*scale-100, top: t.offsetTop*scale-100, behavior: "smooth" });
@@ -216,7 +200,6 @@ jumpBtn.onclick = () => {
   if (Number.isFinite(i) && i >= 0 && i < TOTAL) scrollToIndex(i, false);
 };
 
-/* Keyboard shortcuts */
 document.addEventListener("keydown", (e)=>{
   if (e.key === "+" || e.key === "=") setScale(scale+.1);
   else if (e.key === "-" || e.key === "_") setScale(scale-.1);
@@ -225,13 +208,11 @@ document.addEventListener("keydown", (e)=>{
   else if (e.key === "ArrowUp") { focusedIndex = Math.max(0, focusedIndex-1); scrollToIndex(focusedIndex); }
 });
 
-/* ========= Rarity Heatmap ========= */
 toggleRarity.addEventListener("change", async ()=>{
   if (!toggleRarity.checked) {
     for (const el of stage.children) { el.style.setProperty("--heat","0"); el.removeAttribute("data-heat"); }
     return;
   }
-  // naive: hole Meta in Fenstern, nutze rarity_score falls vorhanden
   const windowSize = 200;
   for (let f=0; f<TOTAL; f+=windowSize) {
     const t = Math.min(TOTAL-1, f+windowSize-1);
@@ -240,38 +221,29 @@ toggleRarity.addEventListener("change", async ()=>{
       const score = meta.rarity_score ?? (meta.attributes||[]).find(a=>`${a.trait_type}`.toLowerCase()==="rarity_score")?.value;
       if (score != null) {
         const el = tile(meta.index); if (!el) return;
-        // normalisiere auf 0..1 (falls du andere Range nutzt, CFG.RARITY_MIN/MAX anpassen)
         const s = Number(score);
         const norm = Math.max(0, Math.min(1, (s - CFG.RARITY_MIN) / (CFG.RARITY_MAX - CFG.RARITY_MIN)));
-        el.style.setProperty("--heat", String(norm * 0.65)); // 0..0.65 Opacity
+        el.style.setProperty("--heat", String(norm * 0.65));
         el.setAttribute("data-heat","1");
       }
     });
   }
 });
 
-/* ========= SSE Live Events ========= */
 function connectEvents() {
   try {
     const es = new EventSource(`${CFG.API}/events`);
-    es.onmessage = (e)=> {
-      // zukünftige Live-Updates (listed pulse etc.)
-      // console.log("event:", e.data);
-    };
     es.onerror = ()=> { es.close(); setTimeout(connectEvents, 5000); };
   } catch {}
 }
 connectEvents();
 
-/* ========= Service Worker ========= */
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./service-worker.js").catch(()=>{});
 }
 
-/* ========= Boot ========= */
 layoutPyramid();
 
-// Initial Status in Blöcken
 (async ()=>{
   const windowSize = 300;
   for (let f=0; f<TOTAL; f+=windowSize) {
@@ -280,12 +252,9 @@ layoutPyramid();
     await new Promise(r=>setTimeout(r, 40));
   }
 })();
-
-// Preload-Wave (alle Videos animiert)
-swapMediaForScale(); // setze Startmedien
+swapMediaForScale();
 preloadAllVideos();
 
-// Share URL ?i=1234 → Springen & öffnen
 const urlParams = new URLSearchParams(location.search);
 if (urlParams.has("i")) {
   const i = parseInt(urlParams.get("i"));
