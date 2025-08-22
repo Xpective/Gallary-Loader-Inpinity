@@ -1,6 +1,6 @@
 export interface Env {
   JSON_BASE_CID: string;
-  IPFS_GATEWAYS: string;
+  IPFS_GATEWAYS: string;   // "https://cloudflare-ipfs.com,https://ipfs.io,..." (ohne Slash am Ende)
   COLLECTION_MINT: string;
   CREATOR: string;
   RPC: string;
@@ -25,7 +25,13 @@ const ok = (data: unknown, headers: Record<string,string> = {}) =>
 const notFound = () => new Response("Not found", { status: 404, headers: CORS });
 
 function gateways(env: Env) {
-  return (env.IPFS_GATEWAYS || "").split(",").map(s => s.trim()).filter(Boolean);
+  const list = (env.IPFS_GATEWAYS || "").split(",").map(s => s.trim()).filter(Boolean);
+  return list.length ? list : ["https://cloudflare-ipfs.com","https://ipfs.io"];
+}
+
+function toHttpFromIpfs(gw: string, uri: string) {
+  if (uri.startsWith("ipfs://")) return `${gw}/ipfs/${uri.slice("ipfs://".length)}`;
+  return uri; // bereits http(s)
 }
 
 async function fetchWithCache(req: Request, maxAge = 3600) {
@@ -52,13 +58,58 @@ async function fetchJsonFromCid(env: Env, path: string) {
   throw new Error("JSON not reachable");
 }
 
-function resolveIpfsUrl(env: Env, uri?: string|null) {
-  if (!uri) return null;
-  if (uri.startsWith("ipfs://")) {
-    const p = uri.replace("ipfs://", "");
-    return `${gateways(env)[0]}/ipfs/${p}`;
+function collectMediaCandidates(env: Env, meta: any) {
+  const arr: string[] = [];
+  const push = (v: any) => { if (!v) return; if (Array.isArray(v)) v.forEach(push); else arr.push(String(v)); };
+
+  // gängige Felder zuerst
+  push(meta.animation_url);
+  push(meta.properties?.animation_url);
+  // properties.files[].uri mit type video
+  const files = meta.properties?.files;
+  if (Array.isArray(files)) {
+    files.forEach((f:any)=>{
+      if (!f?.uri) return;
+      if (!f?.type || /video|mp4|quicktime/i.test(String(f.type))) push(f.uri);
+    });
   }
-  return uri;
+  // Fallbacks
+  push(meta.image);
+  push(meta.properties?.image);
+  return Array.from(new Set(arr)); // uniq
+}
+
+async function proxyBinaryMulti(env: Env, uris: string[], accept: string|undefined, ttlSec = 86400) {
+  const gws = gateways(env);
+  const candidates: string[] = [];
+  for (const uri of uris) for (const gw of gws) candidates.push(toHttpFromIpfs(gw, uri));
+
+  // versuche nacheinander mit kleinem Backoff
+  let attempt = 0;
+  for (const url of candidates) {
+    attempt++;
+    try {
+      const req = new Request(url, {
+        headers: accept ? { accept } : {},
+        cf: { cacheEverything: true, cacheTtl: ttlSec }
+      });
+      const res = await fetchWithCache(req, ttlSec);
+      if (res.ok) {
+        const out = new Response(res.body, res);
+        out.headers.set("cache-control", `public, max-age=${ttlSec}`);
+        Object.entries(CORS).forEach(([k,v]) => out.headers.set(k, v));
+        // content-type korrigieren wenn leer
+        if (!out.headers.get("content-type")) {
+          if (/\.(mp4|mov|webm)(\?|$)/i.test(url)) out.headers.set("content-type","video/mp4");
+          if (/\.(png|jpg|jpeg|gif|webp)(\?|$)/i.test(url)) out.headers.set("content-type","image/*");
+        }
+        return out;
+      }
+    } catch {}
+    // kurzer Backoff, um Gateway-Bursts zu entschärfen
+    await new Promise(r=>setTimeout(r, Math.min(600, 80*attempt)));
+  }
+  return new Response("Upstream error", { status: 502, headers: CORS });
 }
 
 async function metaByIndex(env: Env, index: number) {
@@ -85,43 +136,18 @@ async function statusByIndex(env: Env, index: number) {
   }
 }
 
-async function proxyBinary(env: Env, url: string, maxAgeSec = 86400, accept?: string) {
-  const req = new Request(url, { headers: accept ? { accept } : {}, cf: { cacheEverything: true } });
-  const res = await fetchWithCache(req, maxAgeSec);
-  if (!res.ok) return new Response("Upstream error", { status: 502, headers: CORS });
-  const out = new Response(res.body, res);
-  out.headers.set("cache-control", `public, max-age=${maxAgeSec}`);
-  Object.entries(CORS).forEach(([k,v]) => out.headers.set(k, v));
-  return out;
-}
-
-async function handleVideo(env: Env, index: number) {
-  const meta: any = await metaByIndex(env, index);
-  const anim = meta.animation_url || meta.properties?.animation_url || meta.image;
-  const url = resolveIpfsUrl(env, anim);
-  if (!url) return notFound();
-  return proxyBinary(env, url, 86400, "video/*");
-}
-
-async function handleThumb(env: Env, index: number) {
-  const meta: any = await metaByIndex(env, index);
-  const raw = meta.image || meta.preview || meta.properties?.image || meta.properties?.preview || meta.animation_url;
-  const url = resolveIpfsUrl(env, raw);
-  if (!url) return notFound();
-  return proxyBinary(env, url, 86400, "image/*");
-}
-
-function sse(controller: ReadableStreamDefaultController, data: any) {
-  const enc = new TextEncoder();
-  controller.enqueue(enc.encode(`data: ${JSON.stringify(data)}\n\n`));
-}
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const { pathname, searchParams } = url;
 
     if (request.method === "OPTIONS") return ok({ ok: true });
+
+    // Health & Config
+    if (pathname.endsWith("/pillary/api/health")) return ok({ ok:true, time:Date.now() });
+    if (pathname.endsWith("/pillary/api/config")) return ok({
+      pages: env.PAGES_HOST, cid: env.JSON_BASE_CID, gateways: gateways(env)
+    });
 
     // API: Meta / Status / Batches
     if (/\/pillary\/api\/meta\/\d+$/.test(pathname)) {
@@ -146,14 +172,34 @@ export default {
       return ok({ from, to, data: await Promise.all(jobs) });
     }
 
-    // API: Video / Thumb
+    // API: Video / Thumb (Multi-Gateway + Retry)
     if (/\/pillary\/api\/video\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
-      return handleVideo(env, idx);
+      try {
+        const meta = await metaByIndex(env, idx);
+        const cands = collectMediaCandidates(env, meta);
+        if (!cands.length) return notFound();
+        return proxyBinaryMulti(env, cands, "video/*", 86400);
+      } catch { return new Response("Upstream error", { status: 502, headers: CORS }); }
     }
     if (/\/pillary\/api\/thumb\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
-      return handleThumb(env, idx);
+      try {
+        const meta = await metaByIndex(env, idx);
+        // Bevorzugt image, aber fallbacks einschließen
+        const imgs: string[] = [];
+        if (meta.image) imgs.push(meta.image);
+        if (meta.properties?.image) imgs.push(meta.properties.image);
+        const files = meta.properties?.files;
+        if (Array.isArray(files)) {
+          files.forEach((f:any)=>{ if (f?.uri && /image|png|jpg|jpeg|gif|webp/i.test(String(f.type||""))) imgs.push(f.uri); });
+        }
+        // wenn leer: auf animation_url fallen (Standbild aus Video)
+        if (imgs.length === 0 && (meta.animation_url || meta.properties?.animation_url)) {
+          imgs.push(meta.animation_url || meta.properties.animation_url);
+        }
+        return imgs.length ? proxyBinaryMulti(env, imgs, "image/*", 86400) : notFound();
+      } catch { return new Response("Upstream error", { status: 502, headers: CORS }); }
     }
 
     // API: Events (SSE)
@@ -161,7 +207,10 @@ export default {
       const stream = new ReadableStream({
         start: (controller) => {
           controller.enqueue(new TextEncoder().encode("retry: 5000\n\n"));
-          const iv = setInterval(()=> sse(controller, { t: Date.now(), type: "heartbeat" }), 15000);
+          const iv = setInterval(()=>{
+            const enc = new TextEncoder();
+            controller.enqueue(enc.encode(`data: ${JSON.stringify({ t: Date.now(), type: "heartbeat" })}\n\n`));
+          }, 15000);
           (controller as any)._iv = iv;
         },
         cancel: (reason) => {
@@ -176,12 +225,15 @@ export default {
 
     // STATIC: /pillary* → Pages proxy (alles Nicht-API)
     if (pathname.startsWith("/pillary") && !pathname.startsWith("/pillary/api/")) {
-  const host = env.PAGES_HOST || "gallary-loader-inpinity.pages.dev";
-  const targetUrl = new URL(`https://${host}${pathname.replace(/^\/pillary/, "") || "/"}`);
-  targetUrl.search = url.search;
-  const resp = await fetch(targetUrl.toString(), { cf: { cacheEverything: true }});
-  return new Response(resp.body, resp);
-}
+      const host = env.PAGES_HOST || "gallary-loader-inpinity.pages.dev";
+      const targetUrl = new URL(`https://${host}${pathname.replace(/^\/pillary/, "") || "/"}`);
+      targetUrl.search = url.search;
+      const resp = await fetch(targetUrl.toString(), { cf: { cacheEverything: true, cacheTtl: 300 }});
+      const out = new Response(resp.body, resp);
+      out.headers.set("cache-control", resp.headers.get("cache-control") || "public, max-age=300");
+      Object.entries(CORS).forEach(([k,v]) => out.headers.set(k, v));
+      return out;
+    }
 
     return notFound();
   }
