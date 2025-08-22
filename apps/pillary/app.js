@@ -33,13 +33,21 @@ const api = (p) => fetch(`${CFG.API}${p}`).then(r => {
 
 /** Layout: 1,3,5,…  (Startindex Zeile r = (r-1)^2 ; Index = start + col) */
 function layoutPyramid() {
+  const unit = CFG.TILE + CFG.GAP;
+  const maxCols = 1 + (CFG.ROWS - 1) * 2;            // unterste Reihe hat die meisten Spalten
+  const stageWidth = maxCols * unit - CFG.GAP;        // Breite der gesamten Pyramide
+  stage.style.width = stageWidth + "px";
+
   let y = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
-    const cols = 1 + row * 2;
-    const xStart = 0;
-    let x = xStart;
+    const cols = 1 + row * 2;                         // 1,3,5,7,…
+    const rowStartIndex = row * row;                  // Index-Start dieser Reihe
+    const xOffset = ((maxCols - cols) / 2) * unit;    // zentriert unter der Spitze
+    let x = xOffset;
+
     for (let c = 0; c < cols; c++) {
-      const index = row*row + c; // (row)^2 + c == (row start) + c   (da row bei 0 startet)
+      const index = rowStartIndex + c;
+
       const el = document.createElement("div");
       el.className = "tile";
       el.dataset.index = String(index);
@@ -56,19 +64,20 @@ function layoutPyramid() {
       img.src = `${CFG.API}/thumb/${index}`;
       el.appendChild(img);
 
-      // Digit Overlay (wird später mit Meta befüllt)
+      // Digit-Overlay (wird später per Batch-Meta befüllt)
       const badge = document.createElement("div");
       badge.className = "digit";
-      badge.textContent = ""; // wird via Batch-Meta gesetzt
+      badge.textContent = "";
       el.appendChild(badge);
 
       stage.appendChild(el);
-      x += CFG.TILE + CFG.GAP;
+      x += unit;
     }
-    y += CFG.TILE + CFG.GAP;
+    y += unit;
   }
-  stage.style.width  = Math.max(...[...stage.children].map(t => t.offsetLeft + CFG.TILE)) + "px";
-  stage.style.height = (CFG.TILE + CFG.GAP) * CFG.ROWS + "px";
+
+  // Höhe (rein informativ)
+  stage.style.height = (unit * CFG.ROWS - CFG.GAP) + "px";
 }
 
 function setScale(s) {
