@@ -2,12 +2,20 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
+  <meta http-equiv="x-ua-compatible" content="ie=edge" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Pillary — Pyramiden-Galerie</title>
   <meta name="description" content="Pyramidische NFT-Galerie mit 10.000 Items, Zoom & Live-Status." />
-  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    /* Fallback, damit man sofort etwas sieht */
+    body{background:#0b0f14;color:#dfe7f1;font:14px/1.4 system-ui;margin:0}
+    .boot{padding:12px;color:#9fb6d1}
+  </style>
 </head>
 <body>
+  <div class="boot">Pillary wird geladen…</div>
+
   <header class="topbar">
     <h1>Pi Pillary</h1>
     <div class="controls">
@@ -36,6 +44,13 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js"></script>
+  <!-- Mini-Bootstrap, damit du siehst, dass JS läuft -->
+  <script type="module">
+    const boot = document.querySelector(".boot");
+    if (boot) boot.textContent = "Pillary initialisiert…";
+    console.log("Pillary boot…");
+  </script>
+  <script type="module" src="app.js"></script>
+  <noscript>Bitte JavaScript aktivieren.</noscript>
 </body>
 </html>
