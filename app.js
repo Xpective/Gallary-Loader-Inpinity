@@ -1,23 +1,20 @@
 /* ===========================================
    Pi Pillary – zentrale Zahlen-Pyramide (Cheops-Stil)
    =========================================== */
-
-/* ========= CONFIG ========= */
 const CFG = {
-  API: "https://inpinity.online/pillary/api",
+  API: "https://inpinity.online/pillary/api", // oder "/pillary/api" wenn unter eigener Domain
   ROWS: 100,
   TILE: 32,
   GAP: 4,
   PRELOAD_CONCURRENCY: 4,
-  SCALE_IMG_THRESHOLD: 0.7,   // ab diesem Zoom Videos (wenn sichtbar)
+  SCALE_IMG_THRESHOLD: 0.7,
   INITIAL_ROWS_VISIBLE: 10
 };
 
-/* ========= DOM Helper (null-sicher) ========= */
+/* ========= DOM Helper ========= */
 function reqEl(id) {
   let el = document.getElementById(id);
   if (!el) {
-    // Minimal-Modal zur Not dynamisch nachrüsten
     if (id === "modal") {
       const m = document.createElement("div");
       m.id = "modal"; m.className = "hidden";
@@ -35,7 +32,7 @@ function reqEl(id) {
       reqEl("modal").appendChild(b);
       el = b;
     } else {
-      console.error(`[Pillary] Element #${id} nicht gefunden. Prüfe /pillary/index.html IDs.`);
+      console.error(`[Pillary] Element #${id} nicht gefunden.`);
       throw new Error(`Element #${id} not found`);
     }
   }
@@ -61,16 +58,20 @@ let scale = 1;
 let focusedIndex = 0;
 let userInteracted = false;
 const TOTAL = CFG.ROWS * CFG.ROWS;
+const MAX_PLAYING = 32;
+const playing = new Set();
 
-/* ========= API Helper ========= */
+/* ========= API ========= */
 async function apiGet(p) {
   const r = await fetch(`${CFG.API}${p}`);
   if (!r.ok) throw new Error(`API ${p} -> ${r.status}`);
   return r.json();
 }
 
-/* ========= Utils ========= */
+/* ========= UTIL ========= */
 function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
+function videoTier(){ return scale < 0.5 ? "low" : (scale < 1.2 ? "med" : "high"); }
+function videoUrl(i){ return `${CFG.API}/video/${i}?q=${videoTier()}`; }
 function showModal(html){
   modalContent.innerHTML = html;
   modal.classList.remove("hidden");
@@ -79,23 +80,18 @@ function showModal(html){
 }
 closeModalBtn.onclick = () => modal.classList.add("hidden");
 
-/* ===========================================
-   LAYOUT: zentrale Zahlen-Pyramide
-   Reihe r hat 2r+1 Blöcke; Startindex = r²
-   =========================================== */
+/* ========= LAYOUT: zentrale Pyramide ========= */
 function layoutPyramid() {
   const unit = CFG.TILE + CFG.GAP;
-
-  const maxCols = 2*(CFG.ROWS - 1) + 1; // breiteste Reihe
+  const maxCols = 2*(CFG.ROWS - 1) + 1;
   stage.style.width = (maxCols * unit - CFG.GAP) + "px";
 
   let y = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
-    const cols = 2*row + 1;          // 1,3,5,7,...
-    const rowStartIndex = row*row;   // 0,1,4,9,16,...
-    const mid = Math.floor(cols/2);  // mittlerer Block
-
-    const xOffset = ((maxCols / 2) - mid) * unit; // mittig unter der Achse
+    const cols = 2*row + 1;
+    const rowStartIndex = row*row;
+    const mid = Math.floor(cols/2);
+    const xOffset = ((maxCols / 2) - mid) * unit;
     let x = xOffset;
 
     for (let c = 0; c < cols; c++) {
@@ -113,22 +109,19 @@ function layoutPyramid() {
       el.addEventListener("click", onTileClick);
       el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") onTileClick({ currentTarget: el }); });
 
-      // Start: Thumbnail (niemals schwarz)
       const img = document.createElement("img");
       img.alt = `#${index}`;
       img.src = `${CFG.API}/thumb/${index}`;
-      img.decoding = "async";
-      img.loading = "lazy";
+      img.decoding = "async"; img.loading = "lazy";
       img.onerror = ()=> el.classList.add("failed");
       el.appendChild(img);
 
       const badge = document.createElement("div");
-      badge.className = "digit";
-      badge.textContent = "";
+      badge.className = "digit"; badge.textContent = "";
       el.appendChild(badge);
 
       stage.appendChild(el);
-      io.observe(el); // Sichtbarkeits-Beobachtung
+      io.observe(el);
       x += unit;
     }
     y += unit;
@@ -136,15 +129,15 @@ function layoutPyramid() {
   stage.style.height = (unit * CFG.ROWS - CFG.GAP) + "px";
 }
 
-/* ===========================================
-   MEDIEN-STEUERUNG (Video nur in Sicht / ab Zoom)
-   =========================================== */
+/* ========= Mediensteuerung ========= */
 function makeVideo(idx, posterUrl) {
   const v = document.createElement("video");
   v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
-  v.preload = "metadata";
-  if (posterUrl) v.poster = posterUrl; // verhindert „schwarz“
-  v.src = `${CFG.API}/video/${idx}`;
+  v.preload = "metadata"; v.crossOrigin = "anonymous";
+  if (posterUrl) v.poster = posterUrl;
+  v.src = videoUrl(idx);
+  v.onplay = ()=> playing.add(v);
+  v.onpause = v.onended = ()=> playing.delete(v);
   return v;
 }
 
@@ -156,28 +149,25 @@ function toggleTileMedia(el, isVisible) {
   const hasVideo = !!el.querySelector("video");
 
   if (wantVideo && !hasVideo) {
-    const poster = `${CFG.API}/thumb/${idx}`;
-    const v = makeVideo(idx, poster);
+    if (playing.size >= MAX_PLAYING) { el.classList.add("pulse"); return; }
+    el.classList.remove("pulse");
+    const v = makeVideo(idx, `${CFG.API}/thumb/${idx}`);
     v.onerror = ()=> el.classList.add("failed");
     const old = el.firstChild; if (old) el.removeChild(old);
     el.prepend(v);
-    v.play().catch(()=>{}); // Autoplay-Safety
+    v.play().catch(()=>{});
   } else if (!wantVideo && hasVideo) {
     const img = document.createElement("img");
     img.alt = `#${idx}`;
     img.src = `${CFG.API}/thumb/${idx}`;
-    img.decoding = "async";
-    img.loading = "lazy";
+    img.decoding = "async"; img.loading = "lazy";
     img.onerror = ()=> el.classList.add("failed");
     const old = el.firstChild; if (old) el.removeChild(old);
     el.prepend(img);
+    el.classList.add("pulse");
   }
 }
 
-/* Sichtbarkeits-Observer:
-   – setzt .inview-Klasse (für Dimmen außerhalb)
-   – triggert Medienwechsel
-*/
 const io = new IntersectionObserver((entries)=>{
   for (const ent of entries) {
     const el = ent.target;
@@ -186,14 +176,9 @@ const io = new IntersectionObserver((entries)=>{
     else el.classList.remove("inview");
     toggleTileMedia(el, ent.isIntersecting);
   }
-}, {
-  root: stageWrap,
-  rootMargin: "256px 0px",
-  threshold: 0.25
-});
+}, { root: stageWrap, rootMargin: "256px 0px", threshold: 0.25 });
 
 function visibleSwap() {
-  // ergänzend für Zoom: markiere sichtbar/unsichtbar (grobe Box-Check)
   const wrapRect = stageWrap.getBoundingClientRect();
   for (const el of stage.children) {
     const rect = el.getBoundingClientRect();
@@ -204,34 +189,25 @@ function visibleSwap() {
 }
 
 function forceVideoForTopRows(N) {
-  // Top-N-Reihen sofort als "sichtbar" behandeln (Glow & Video)
   for (let row = 0; row < Math.min(N, CFG.ROWS); row++) {
     const cols = 2*row + 1;
     const start = row*row;
     const end = start + cols - 1;
     for (let i = start; i <= end; i++) {
       const el = tile(i);
-      if (el) {
-        el.classList.add("inview");
-        toggleTileMedia(el, true);
-      }
+      if (el) { el.classList.add("inview"); toggleTileMedia(el, true); }
     }
   }
 }
 
-/* ===========================================
-   ZOOM & INITIAL VIEW
-   =========================================== */
+/* ========= Zoom & Initial View ========= */
 function setScale(s, { noSwap = false } = {}) {
   const prev = scale;
   scale = Math.max(0.2, Math.min(6, s));
   stage.style.transform = `scale(${scale})`;
   zoomLevel.textContent = Math.round(scale * 100) + "%";
-
-  const crossed =
-    (prev < CFG.SCALE_IMG_THRESHOLD && scale >= CFG.SCALE_IMG_THRESHOLD) ||
-    (prev >= CFG.SCALE_IMG_THRESHOLD && scale < CFG.SCALE_IMG_THRESHOLD);
-
+  const crossed = (prev < CFG.SCALE_IMG_THRESHOLD && scale >= CFG.SCALE_IMG_THRESHOLD) ||
+                  (prev >= CFG.SCALE_IMG_THRESHOLD && scale < CFG.SCALE_IMG_THRESHOLD);
   if (!noSwap && crossed) visibleSwap();
 }
 
@@ -245,23 +221,20 @@ function setInitialView() {
   const wanted = CFG.INITIAL_ROWS_VISIBLE * unit - CFG.GAP;
   const h = Math.max(100, stageWrap.clientHeight);
   const targetScale = Math.max(0.2, Math.min(6, h / wanted));
-
   setScale(targetScale, { noSwap: true });
   requestAnimationFrame(() => {
     centerOnApex();
-    visibleSwap();                          // sichtbare Tiles erkennen
-    forceVideoForTopRows(CFG.INITIAL_ROWS_VISIBLE); // Top-N direkt Video
+    visibleSwap();
+    forceVideoForTopRows(CFG.INITIAL_ROWS_VISIBLE);
   });
 }
 
-/* Zoom-Controls */
+/* ========= Controls ========= */
 zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); visibleSwap(); };
 zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); visibleSwap(); };
 
-/* Pinch/Ctrl+Scroll */
 stageWrap.addEventListener("wheel", (e)=>{
-  if (!e.ctrlKey) return;
-  e.preventDefault();
+  if (!e.ctrlKey) return; e.preventDefault();
   userInteracted = true;
   setScale(scale + (e.deltaY < 0 ? .1 : -.1));
   visibleSwap();
@@ -271,17 +244,14 @@ stageWrap.addEventListener("wheel", (e)=>{
   window.addEventListener(evt, ()=> userInteracted = true, { passive:true });
 });
 
-/* ===========================================
-   META + STATUS (Batch) + RARITY-Glow
-   =========================================== */
+/* ========= Meta/Status + Rarity ========= */
 async function loadMetaBatch(from, to) {
   const { data } = await apiGet(`/batch/meta?from=${from}&to=${to}`);
   data.forEach(meta=>{
-    if (!meta || meta.error) return;  // Problem-Indizes skippen
+    if (!meta || meta.error) return;
     const i = meta.index;
     const el = tile(i);
     if (!el) return;
-
     const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
     const by = (k) => attrs.find(a => (a.trait_type||"").toLowerCase() === k);
 
@@ -294,7 +264,6 @@ async function loadMetaBatch(from, to) {
     if (axis === true || axis === "true") el.classList.add("axis");
     if (pair === true || pair === "true") el.classList.add("pair");
 
-    // Rarity-Heat (0..100 → 0..1)
     const score =
       meta.rarity_score ??
       (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarity_score")?.value) ??
@@ -317,7 +286,7 @@ async function loadStatusBatch(from, to) {
     else if (s.listed) el.dataset.status = "listed";
     else if (s.verified) el.dataset.status = "verified";
     if (s.market && s.market !== "none") {
-      el.dataset.market = s.market; // "me" | "okx" | "both"
+      el.dataset.market = s.market;
       const t = el.getAttribute("title") || `#${s.index}`;
       const marketTxt = s.market === "both" ? "ME + OKX" : (s.market.toUpperCase());
       el.title = `${t} — listed on ${marketTxt}`;
@@ -327,9 +296,7 @@ async function loadStatusBatch(from, to) {
   });
 }
 
-/* ===========================================
-   DETAIL-MODAL
-   =========================================== */
+/* ========= Modal ========= */
 async function onTileClick(e) {
   try {
     const el = e.currentTarget;
@@ -365,15 +332,16 @@ async function onTileClick(e) {
       <div class="links">
         ${meta.mint ? `<a target="_blank" href="${links.magicEdenItem}">Kaufen @ Magic Eden</a>` : ""}
         ${meta.mint ? `<a target="_blank" href="${links.okxNftItem}">Kaufen @ OKX</a>` : ""}
-        <a target="_blank" href="https://magiceden.io/marketplace/inpi">Collection</a>
+        <a target="_blank" href="https://magiceden.io/marketplace/inpi">Collection @ Magic Eden</a>
+        <a target="_blank" href="https://web3.okx.com/ul/FOFXecp">Token @ OKX</a>
         <a target="_blank" href="https://solscan.io/account/GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp">Creator</a>
       </div>`;
 
     showModal(`
       <h3>${meta.name ?? "Item"} — #${idx}</h3>
       ${rows}${linkHtml}
-      <video src="${CFG.API}/video/${idx}" controls muted playsinline loop
-             preload="metadata" poster="${CFG.API}/thumb/${idx}"
+      <video src="${videoUrl(idx)}" controls muted playsinline loop preload="metadata"
+             poster="${CFG.API}/thumb/${idx}"
              style="width:100%;margin-top:8px;border-radius:8px"></video>
     `);
   } catch (err) {
@@ -382,9 +350,7 @@ async function onTileClick(e) {
   }
 }
 
-/* ===========================================
-   OPTIONAL: Preload-Checkbox
-   =========================================== */
+/* ========= Preload-Checkbox ========= */
 async function preloadAllVideos() {
   const conc = CFG.PRELOAD_CONCURRENCY;
   let next = 0;
@@ -408,15 +374,12 @@ async function preloadAllVideos() {
 }
 preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
-/* ===========================================
-   SCROLL: Lazy-Batches je sichtbarer Zeile
-   =========================================== */
+/* ========= Scroll-Lazy ========= */
 let lastScrollY = 0;
 stageWrap.addEventListener("scroll", ()=> {
   const y = stageWrap.scrollTop / (scale || 1);
   if (Math.abs(y - lastScrollY) < 64) return;
   lastScrollY = y;
-
   const unit = CFG.TILE + CFG.GAP;
   const row = Math.floor(y / unit);
   const windowRows = [row-2, row-1, row, row+1, row+2].filter(r => r>=0 && r<CFG.ROWS);
@@ -426,13 +389,32 @@ stageWrap.addEventListener("scroll", ()=> {
     loadMetaBatch(from, to).catch(()=>{});
     loadStatusBatch(from, to).catch(()=>{});
   });
-
   visibleSwap();
 }, { passive:true });
 
-/* ===========================================
-   NAVIGATION
-   =========================================== */
+/* ========= Vorab-Prefetch eine Reihe voraus ========= */
+let idleHandle = null;
+function prefetchAhead() {
+  if (idleHandle) cancelIdleCallback(idleHandle);
+  idleHandle = requestIdleCallback(async ()=> {
+    const y = stageWrap.scrollTop / (scale || 1);
+    const unit = CFG.TILE + CFG.GAP;
+    const row = Math.floor(y / unit) + 1;
+    if (row >= 0 && row < CFG.ROWS) {
+      const from = row*row;
+      const to   = from + (2*row + 1) - 1;
+      try {
+        await Promise.all([
+          apiGet(`/batch/meta?from=${from}&to=${to}`),
+          apiGet(`/batch/status?from=${from}&to=${to}`)
+        ]);
+      } catch {}
+    }
+  }, { timeout: 1200 });
+}
+stageWrap.addEventListener("scroll", prefetchAhead, { passive:true });
+
+/* ========= Navigation ========= */
 function scrollToIndex(i, open = false) {
   const t = tile(i); if (!t) return;
   stageWrap.scrollTo({ left: t.offsetLeft*scale-100, top: t.offsetTop*scale-100, behavior: "smooth" });
@@ -453,9 +435,7 @@ document.addEventListener("keydown", (e)=>{
   else if (e.key === "ArrowUp") { focusedIndex = Math.max(0, focusedIndex-1); scrollToIndex(focusedIndex); }
 });
 
-/* ===========================================
-   SSE Heartbeats (ggf. /stream nutzen, wenn Blocker)
-   =========================================== */
+/* ========= SSE ========= */
 function connectEvents() {
   try {
     const es = new EventSource(`${CFG.API}/events`);
@@ -463,17 +443,14 @@ function connectEvents() {
   } catch {}
 }
 
-/* ===========================================
-   BOOT
-   =========================================== */
+/* ========= Boot ========= */
 (function boot(){
   layoutPyramid();
   requestAnimationFrame(setInitialView);
   connectEvents();
 
-  // Meta & Status in Wellen
   (async ()=>{
-    const windowSize = 150; // kleinere Wellen schonend
+    const windowSize = 150;
     for (let f=0; f<TOTAL; f+=windowSize) {
       const t = Math.min(TOTAL-1, f+windowSize-1);
       loadMetaBatch(f, t).catch(()=>{});
@@ -482,7 +459,6 @@ function connectEvents() {
     }
   })();
 
-  // Auf Fenstergröße reagieren (neu einpassen solange keine Interaktion)
   window.addEventListener("resize", ()=>{
     if (!userInteracted) setInitialView();
   });
