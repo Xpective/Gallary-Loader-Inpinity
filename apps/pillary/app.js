@@ -2,8 +2,8 @@ const CFG = {
   API: "/pillary/api",
   ROWS: 100,
   TILE: 32,
-  GAP: 4,
-  PRELOAD_CONCURRENCY: 8,
+  GAP: 4,                 // auf 0 setzen, wenn „Kante auf Kante“
+  PRELOAD_CONCURRENCY: 4, // vorsichtig starten; kann später hoch
   RARITY_MIN: 0,
   RARITY_MAX: 100,
   SCALE_IMG_THRESHOLD: 0.7,
@@ -31,23 +31,21 @@ const api = (p) => fetch(`${CFG.API}${p}`).then(r => {
   return r.json();
 });
 
-/** Layout: 1,3,5,…  (Startindex Zeile r = (r-1)^2 ; Index = start + col) */
+/** ZENTRIERTE Pyramide: Reihe r hat 1+2r Spalten, Startindex r^2, horizontaler Offset zur Mitte */
 function layoutPyramid() {
   const unit = CFG.TILE + CFG.GAP;
-  const maxCols = 1 + (CFG.ROWS - 1) * 2;            // unterste Reihe hat die meisten Spalten
-  const stageWidth = maxCols * unit - CFG.GAP;        // Breite der gesamten Pyramide
-  stage.style.width = stageWidth + "px";
+  const maxCols = 1 + (CFG.ROWS - 1) * 2;
+  stage.style.width = (maxCols * unit - CFG.GAP) + "px";
 
   let y = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
-    const cols = 1 + row * 2;                         // 1,3,5,7,…
-    const rowStartIndex = row * row;                  // Index-Start dieser Reihe
-    const xOffset = ((maxCols - cols) / 2) * unit;    // zentriert unter der Spitze
+    const cols = 1 + row * 2;
+    const rowStartIndex = row * row;
+    const xOffset = ((maxCols - cols) / 2) * unit;
     let x = xOffset;
 
     for (let c = 0; c < cols; c++) {
       const index = rowStartIndex + c;
-
       const el = document.createElement("div");
       el.className = "tile";
       el.dataset.index = String(index);
@@ -64,7 +62,6 @@ function layoutPyramid() {
       img.src = `${CFG.API}/thumb/${index}`;
       el.appendChild(img);
 
-      // Digit-Overlay (wird später per Batch-Meta befüllt)
       const badge = document.createElement("div");
       badge.className = "digit";
       badge.textContent = "";
@@ -75,9 +72,13 @@ function layoutPyramid() {
     }
     y += unit;
   }
-
-  // Höhe (rein informativ)
   stage.style.height = (unit * CFG.ROWS - CFG.GAP) + "px";
+
+  // beim ersten Laden die Mitte zeigen
+  requestAnimationFrame(()=>{
+    const midX = Math.max(0, (stage.scrollWidth - stageWrap.clientWidth) / 2);
+    stageWrap.scrollTo({ left: midX, top: 0, behavior: "auto" });
+  });
 }
 
 function setScale(s) {
@@ -90,7 +91,6 @@ function setScale(s) {
     swapMediaForScale();
   }
 }
-
 zoomInBtn.onclick  = () => setScale(scale + .1);
 zoomOutBtn.onclick = () => setScale(scale - .1);
 stageWrap.addEventListener("wheel", (e)=>{
@@ -101,33 +101,30 @@ stageWrap.addEventListener("wheel", (e)=>{
 
 closeModal.onclick = () => modal.classList.add("hidden");
 function showModal(html){ modalContent.innerHTML = html; modal.classList.remove("hidden"); }
-
 function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
 
-/** Liest Pi-Digit / Axis / MatchingPair / RarityScore und Status in Batches */
+/** Batch-Meta: Digit/Achse/Pair einblenden */
 async function loadMetaBatch(from, to) {
   const { data } = await api(`/batch/meta?from=${from}&to=${to}`);
   data.forEach(meta=>{
     const i = meta.index;
     const el = tile(i);
     if (!el) return;
-
-    // Digit / Axis / MatchingPair aus attributes
     const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
     const by = (k) => attrs.find(a => (a.trait_type||"").toLowerCase() === k);
 
-    const digit = meta.Digit ?? by("digit")?.value;
-    const axis  = meta.Axis ?? by("axis")?.value;
-    const pair  = meta.MatchingPair ?? by("matchingpair")?.value;
+    const digit = by("digit")?.value ?? meta.Digit;
+    const axis  = by("axis")?.value ?? meta.Axis;
+    const pair  = by("matchingpair")?.value ?? meta.MatchingPair;
 
     const badge = el.querySelector(".digit");
     if (badge && digit != null) badge.textContent = String(digit);
-
     if (axis === true || axis === "true") el.classList.add("axis");
     if (pair === true || pair === "true") el.classList.add("pair");
   });
 }
 
+/** Batch-Status: minted/listed/verified setzen */
 async function loadStatusBatch(from, to) {
   const { data } = await api(`/batch/status?from=${from}&to=${to}`);
   data.forEach(s => {
@@ -187,15 +184,18 @@ async function onTileClick(e) {
   `);
 }
 
+/** Video/Thumb Swap abhängig vom Zoom – mit Fail-Schutz */
 function swapMediaForScale() {
   const useVideo = scale >= CFG.SCALE_IMG_THRESHOLD;
   for (const el of stage.children) {
     const idx = parseInt(el.dataset.index);
+    if (el.classList.contains("failed")) continue; // 502 o.ä. → spare erneute Versuche
     const hasVideo = el.querySelector("video");
     if (useVideo && !hasVideo) {
       const v = document.createElement("video");
       v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
       v.src = `${CFG.API}/video/${idx}`;
+      v.onerror = ()=> el.classList.add("failed");
       const old = el.firstChild; if (old) el.removeChild(old);
       el.prepend(v);
       v.play().catch(()=>{});
@@ -203,12 +203,14 @@ function swapMediaForScale() {
       const img = document.createElement("img");
       img.alt = `#${idx}`;
       img.src = `${CFG.API}/thumb/${idx}`;
+      img.onerror = ()=> el.classList.add("failed");
       const old = el.firstChild; if (old) el.removeChild(old);
       el.prepend(img);
     }
   }
 }
 
+/** Vorsichtiges Preload mit Fehlerbehandlung (markiert .failed bei 502) */
 async function preloadAllVideos() {
   const conc = CFG.PRELOAD_CONCURRENCY;
   let next = 0;
@@ -216,24 +218,25 @@ async function preloadAllVideos() {
     while (preloadAllChk.checked && next < TOTAL) {
       const i = next++;
       const el = tile(i);
-      if (!el) continue;
+      if (!el || el.classList.contains("failed")) continue;
       try {
         if (!el.querySelector("video")) {
           const v = document.createElement("video");
           v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
           v.src = `${CFG.API}/video/${i}`;
+          v.onerror = ()=> el.classList.add("failed");
           const old = el.firstChild; if (old) el.removeChild(old);
           el.prepend(v);
           await v.play().catch(()=>{});
         }
-      } catch {}
+      } catch { el.classList.add("failed"); }
     }
   }
   await Promise.all(Array.from({ length: conc }, worker));
 }
 preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
-/** Lazy-Meta pro sichtbarer Zeile (holt Digit/Achse/Pair und setzt Status) */
+/** Lazy-Batches pro sichtbarer Zeile */
 let lastScrollY = 0;
 stageWrap.addEventListener("scroll", ()=> {
   const y = stageWrap.scrollTop / (scale || 1);
@@ -296,22 +299,18 @@ toggleRarity.addEventListener("change", async ()=>{
 });
 
 function connectEvents() {
-  try {
-    const es = new EventSource(`${CFG.API}/events`);
+  try { const es = new EventSource(`${CFG.API}/events`);
     es.onerror = ()=> { es.close(); setTimeout(connectEvents, 5000); };
   } catch {}
 }
 connectEvents();
 
-/* Für klare Tests: Service Worker erstmal aus (kannst du später wieder aktivieren) */
-// if ("serviceWorker" in navigator) {
-//   navigator.serviceWorker.register("service-worker.js").catch(()=>{});
-// }
+// Service Worker erstmal aus (Cache stört sonst beim Debug)
+// if ("serviceWorker" in navigator) { navigator.serviceWorker.register("service-worker.js").catch(()=>{}); }
 
 layoutPyramid();
 
 (async ()=>{
-  // Erste Wellen: Status + Digit/Axis/Pair
   const windowSize = 300;
   for (let f=0; f<TOTAL; f+=windowSize) {
     const t = Math.min(TOTAL-1, f+windowSize-1);
@@ -321,10 +320,4 @@ layoutPyramid();
   }
 })();
 swapMediaForScale();
-preloadAllVideos();
-
-const urlParams = new URLSearchParams(location.search);
-if (urlParams.has("i")) {
-  const i = parseInt(urlParams.get("i"));
-  if (Number.isFinite(i)) scrollToIndex(i, true);
-}
+// preload erst auf Wunsch einschalten (Häkchen setzen)
