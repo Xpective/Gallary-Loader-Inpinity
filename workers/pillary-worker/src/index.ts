@@ -31,6 +31,11 @@ type R2Bucket = {
   head?(key: string): Promise<any>;
 };
 
+.tile{
+  content-visibility: auto;
+  contain-intrinsic-size: 32px 32px; /* reserviert Platz ohne rendern */
+}
+
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, OPTIONS",
