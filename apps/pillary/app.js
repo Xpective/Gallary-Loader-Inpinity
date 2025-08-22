@@ -2,8 +2,8 @@ const CFG = {
   API: "/pillary/api",
   ROWS: 100,
   TILE: 32,
-  GAP: 4,                 // auf 0 setzen, wenn „Kante auf Kante“
-  PRELOAD_CONCURRENCY: 4, // vorsichtig starten; kann später hoch
+  GAP: 4,
+  PRELOAD_CONCURRENCY: 6,
   RARITY_MIN: 0,
   RARITY_MAX: 100,
   SCALE_IMG_THRESHOLD: 0.7,
@@ -31,16 +31,17 @@ const api = (p) => fetch(`${CFG.API}${p}`).then(r => {
   return r.json();
 });
 
-/** ZENTRIERTE Pyramide: Reihe r hat 1+2r Spalten, Startindex r^2, horizontaler Offset zur Mitte */
+/** Layout als Pyramide (zentral) */
 function layoutPyramid() {
   const unit = CFG.TILE + CFG.GAP;
   const maxCols = 1 + (CFG.ROWS - 1) * 2;
-  stage.style.width = (maxCols * unit - CFG.GAP) + "px";
+  const stageWidth = maxCols * unit - CFG.GAP;
+  stage.style.width = stageWidth + "px";
 
   let y = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
-    const cols = 1 + row * 2;
-    const rowStartIndex = row * row;
+    const cols = 1 + row * 2;            // 1,3,5,…
+    const rowStartIndex = row * row;     // Reihenstart
     const xOffset = ((maxCols - cols) / 2) * unit;
     let x = xOffset;
 
@@ -73,12 +74,6 @@ function layoutPyramid() {
     y += unit;
   }
   stage.style.height = (unit * CFG.ROWS - CFG.GAP) + "px";
-
-  // beim ersten Laden die Mitte zeigen
-  requestAnimationFrame(()=>{
-    const midX = Math.max(0, (stage.scrollWidth - stageWrap.clientWidth) / 2);
-    stageWrap.scrollTo({ left: midX, top: 0, behavior: "auto" });
-  });
 }
 
 function setScale(s) {
@@ -91,8 +86,10 @@ function setScale(s) {
     swapMediaForScale();
   }
 }
+
 zoomInBtn.onclick  = () => setScale(scale + .1);
 zoomOutBtn.onclick = () => setScale(scale - .1);
+
 stageWrap.addEventListener("wheel", (e)=>{
   if (!e.ctrlKey) return;
   e.preventDefault();
@@ -101,30 +98,32 @@ stageWrap.addEventListener("wheel", (e)=>{
 
 closeModal.onclick = () => modal.classList.add("hidden");
 function showModal(html){ modalContent.innerHTML = html; modal.classList.remove("hidden"); }
+
 function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
 
-/** Batch-Meta: Digit/Achse/Pair einblenden */
+/** Batch-Laden von Metadaten */
 async function loadMetaBatch(from, to) {
   const { data } = await api(`/batch/meta?from=${from}&to=${to}`);
   data.forEach(meta=>{
     const i = meta.index;
     const el = tile(i);
     if (!el) return;
+
     const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
     const by = (k) => attrs.find(a => (a.trait_type||"").toLowerCase() === k);
 
-    const digit = by("digit")?.value ?? meta.Digit;
-    const axis  = by("axis")?.value ?? meta.Axis;
-    const pair  = by("matchingpair")?.value ?? meta.MatchingPair;
+    const digit = meta.Digit ?? by("digit")?.value;
+    const axis  = meta.Axis ?? by("axis")?.value;
+    const pair  = meta.MatchingPair ?? by("matchingpair")?.value;
 
     const badge = el.querySelector(".digit");
     if (badge && digit != null) badge.textContent = String(digit);
+
     if (axis === true || axis === "true") el.classList.add("axis");
     if (pair === true || pair === "true") el.classList.add("pair");
   });
 }
 
-/** Batch-Status: minted/listed/verified setzen */
 async function loadStatusBatch(from, to) {
   const { data } = await api(`/batch/status?from=${from}&to=${to}`);
   data.forEach(s => {
@@ -136,6 +135,7 @@ async function loadStatusBatch(from, to) {
   });
 }
 
+/** Klick öffnet Modal mit Collection-Infos */
 async function onTileClick(e) {
   const el = e.currentTarget;
   const idx = parseInt(el.dataset.index);
@@ -150,8 +150,6 @@ async function onTileClick(e) {
     (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarityscore")?.value);
 
   const digit = (attrs.find(a => (a.trait_type||"").toLowerCase() === "digit")?.value);
-  const axis  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "axis")?.value);
-  const pair  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "matchingpair")?.value);
 
   const rows = [
     ["Index", `#${idx}`],
@@ -159,9 +157,6 @@ async function onTileClick(e) {
     ["Mint", meta.mint || ""],
     ["Symbol", meta.symbol || ""],
     ["Digit (π)", digit ?? ""],
-    ["Axis", axis ?? ""],
-    ["Matching Pair", pair ?? ""],
-    ["Animation", meta.animation_url || meta.properties?.animation_url || ""],
     ["Rarity Score", rarityScore ?? ""],
   ].map(([k,v])=> `<div class="meta-row"><b>${k}</b><div>${(v||"").toString()}</div></div>`).join("");
 
@@ -173,29 +168,34 @@ async function onTileClick(e) {
     <div class="links">
       ${meta.mint ? `<a target="_blank" href="${links.magicEdenItem}">Kaufen @ Magic Eden</a>` : ""}
       ${meta.mint ? `<a target="_blank" href="${links.okxNftItem}">Kaufen @ OKX</a>` : ""}
-      <a target="_blank" href="https://magiceden.io/marketplace/InPi">Collection</a>
-      <a target="_blank" href="https://solscan.io/account/GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp">Creator</a>
+      <a target="_blank" href="${links.collection}">Collection</a>
+      <a target="_blank" href="${links.creator}">Creator</a>
+    </div>`;
+
+  const collHtml = `
+    <div class="collection-info">
+      <p><b>Collection Utility:</b> Zugang zu Inpinity Farmverse, Premints & Tokenomics-Phasen</p>
+      <p><b>Contract:</b> ${meta.collectionInfo?.address}</p>
+      <p><b>Creator:</b> ${meta.collectionInfo?.creator}</p>
     </div>`;
 
   showModal(`
     <h3>${meta.name ?? "Item"} — #${idx}</h3>
-    ${rows}${attrHtml}${linkHtml}
+    ${rows}${attrHtml}${collHtml}${linkHtml}
     <video src="${CFG.API}/video/${idx}" controls muted playsinline loop style="width:100%;margin-top:8px;border-radius:8px"></video>
   `);
 }
 
-/** Video/Thumb Swap abhängig vom Zoom – mit Fail-Schutz */
+/** Bild ↔ Video Swap */
 function swapMediaForScale() {
   const useVideo = scale >= CFG.SCALE_IMG_THRESHOLD;
   for (const el of stage.children) {
     const idx = parseInt(el.dataset.index);
-    if (el.classList.contains("failed")) continue; // 502 o.ä. → spare erneute Versuche
     const hasVideo = el.querySelector("video");
     if (useVideo && !hasVideo) {
       const v = document.createElement("video");
       v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
       v.src = `${CFG.API}/video/${idx}`;
-      v.onerror = ()=> el.classList.add("failed");
       const old = el.firstChild; if (old) el.removeChild(old);
       el.prepend(v);
       v.play().catch(()=>{});
@@ -203,14 +203,13 @@ function swapMediaForScale() {
       const img = document.createElement("img");
       img.alt = `#${idx}`;
       img.src = `${CFG.API}/thumb/${idx}`;
-      img.onerror = ()=> el.classList.add("failed");
       const old = el.firstChild; if (old) el.removeChild(old);
       el.prepend(img);
     }
   }
 }
 
-/** Vorsichtiges Preload mit Fehlerbehandlung (markiert .failed bei 502) */
+/** Auto-Preload Videos */
 async function preloadAllVideos() {
   const conc = CFG.PRELOAD_CONCURRENCY;
   let next = 0;
@@ -218,25 +217,24 @@ async function preloadAllVideos() {
     while (preloadAllChk.checked && next < TOTAL) {
       const i = next++;
       const el = tile(i);
-      if (!el || el.classList.contains("failed")) continue;
+      if (!el) continue;
       try {
         if (!el.querySelector("video")) {
           const v = document.createElement("video");
           v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
           v.src = `${CFG.API}/video/${i}`;
-          v.onerror = ()=> el.classList.add("failed");
           const old = el.firstChild; if (old) el.removeChild(old);
           el.prepend(v);
           await v.play().catch(()=>{});
         }
-      } catch { el.classList.add("failed"); }
+      } catch {}
     }
   }
   await Promise.all(Array.from({ length: conc }, worker));
 }
 preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
-/** Lazy-Batches pro sichtbarer Zeile */
+/** Lazy-Load Batches beim Scrollen */
 let lastScrollY = 0;
 stageWrap.addEventListener("scroll", ()=> {
   const y = stageWrap.scrollTop / (scale || 1);
@@ -253,6 +251,7 @@ stageWrap.addEventListener("scroll", ()=> {
   });
 }, { passive:true });
 
+/** Scroll zu bestimmtem Index */
 function scrollToIndex(i, open = false) {
   const t = tile(i); if (!t) return;
   stageWrap.scrollTo({ left: t.offsetLeft*scale-100, top: t.offsetTop*scale-100, behavior: "smooth" });
@@ -264,51 +263,13 @@ jumpBtn.onclick = () => {
   if (Number.isFinite(i) && i >= 0 && i < TOTAL) scrollToIndex(i, false);
 };
 
-document.addEventListener("keydown", (e)=>{
-  if (e.key === "+" || e.key === "=") setScale(scale+.1);
-  else if (e.key === "-" || e.key === "_") setScale(scale-.1);
-  else if (e.key.toLowerCase() === "f") scrollToIndex(focusedIndex, true);
-  else if (e.key === "ArrowDown") { focusedIndex = Math.min(TOTAL-1, focusedIndex+1); scrollToIndex(focusedIndex); }
-  else if (e.key === "ArrowUp") { focusedIndex = Math.max(0, focusedIndex-1); scrollToIndex(focusedIndex); }
-});
-
-toggleRarity.addEventListener("change", async ()=>{
-  if (!toggleRarity.checked) {
-    for (const el of stage.children) { el.style.setProperty("--heat","0"); el.removeAttribute("data-heat"); }
-    return;
-  }
-  const windowSize = 200;
-  for (let f=0; f<TOTAL; f+=windowSize) {
-    const t = Math.min(TOTAL-1, f+windowSize-1);
-    const { data } = await api(`/batch/meta?from=${f}&to=${t}`);
-    data.forEach(meta=>{
-      const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
-      const score =
-        meta.rarity_score ??
-        (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarity_score")?.value) ??
-        (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarityscore")?.value);
-      if (score != null) {
-        const el = tile(meta.index); if (!el) return;
-        const s = Number(score);
-        const norm = Math.max(0, Math.min(1, (s - CFG.RARITY_MIN) / (CFG.RARITY_MAX - CFG.RARITY_MIN)));
-        el.style.setProperty("--heat", String(norm * 0.65));
-        el.setAttribute("data-heat","1");
-      }
-    });
-  }
-});
-
-function connectEvents() {
-  try { const es = new EventSource(`${CFG.API}/events`);
-    es.onerror = ()=> { es.close(); setTimeout(connectEvents, 5000); };
-  } catch {}
-}
-connectEvents();
-
-// Service Worker erstmal aus (Cache stört sonst beim Debug)
-// if ("serviceWorker" in navigator) { navigator.serviceWorker.register("service-worker.js").catch(()=>{}); }
-
+/** Start */
 layoutPyramid();
+swapMediaForScale();
+
+// Start bei Reihe 10
+const row10start = 10*10;
+scrollToIndex(row10start);
 
 (async ()=>{
   const windowSize = 300;
@@ -319,5 +280,3 @@ layoutPyramid();
     await new Promise(r=>setTimeout(r, 40));
   }
 })();
-swapMediaForScale();
-// preload erst auf Wunsch einschalten (Häkchen setzen)
