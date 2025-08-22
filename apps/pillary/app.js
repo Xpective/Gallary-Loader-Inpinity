@@ -1,15 +1,26 @@
+/* ===========================================
+   Pi Pillary – Cheops Pyramid Gallery
+   - Apex (#0) oben, zentriert
+   - Erste N Reihen sofort als VIDEO
+   - Sonst PNG; Videos erst im Sichtbereich / ab Zoom
+   - Achsen & Rarity aus pi_phi_table.json (optional)
+   =========================================== */
+
+/* ========= CONFIG ========= */
 const CFG = {
-  API: "/pillary/api",
+  API: "https://inpinity.online/pillary/api", // absolut -> immer dein Worker
   ROWS: 100,
   TILE: 32,
-  GAP: 4,
-  PRELOAD_CONCURRENCY: 4,
-  RARITY_MIN: 0,
-  RARITY_MAX: 100,
-  SCALE_IMG_THRESHOLD: 0.7,
-  INITIAL_VIDEO_ROWS: 10,       // NEU: erste 10 Reihen direkt Video
+  GAP: 4,                  // 0 = Kante-auf-Kante
+  PRELOAD_CONCURRENCY: 4,  // optionales Voll-Preload per Checkbox
+  SCALE_IMG_THRESHOLD: 0.7, // ab welchem Zoom Videos (wenn sichtbar)
+  INITIAL_ROWS_VISIBLE: 10,  // wie viele Reihen anfänglich exakt sichtbar
+
+  // Geometrie/Rarity-Tabelle (π/φ, Achse, Rarity)
+  GEOM_URL: "/pillary/pi_phi_table.json", // lege die Datei so ab
 };
 
+/* ========= DOM HOOKS ========= */
 const stage = document.getElementById("stage");
 const stageWrap = document.getElementById("stageWrap");
 const zoomInBtn = document.getElementById("zoomIn");
@@ -23,30 +34,65 @@ const modal = document.getElementById("modal");
 const modalContent = document.getElementById("modalContent");
 const closeModal = document.getElementById("closeModal");
 
+/* ========= STATE ========= */
 let scale = 1;
 let focusedIndex = 0;
+let userInteracted = false;
 const TOTAL = CFG.ROWS * CFG.ROWS;
 
+// GEOM-Daten-Cache: index -> { is_axis, rarity_score, digit_pi, ... }
+const GEOM = new Map();
+
+/* ========= API Helper ========= */
 const api = (p) => fetch(`${CFG.API}${p}`).then(r => {
   if (!r.ok) throw new Error(`API ${p} -> ${r.status}`);
   return r.json();
 });
 
-// === Pyramid-Layout
+/* ========= Utility ========= */
+function rowOf(index){ return Math.floor(Math.sqrt(index)); }
+function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
+
+/* ========= Geometrie-Daten laden (optional, aber empfohlen) ========= */
+async function loadGeom() {
+  try {
+    const res = await fetch(CFG.GEOM_URL, { cache: "force-cache" });
+    if (!res.ok) return;
+    const arr = await res.json();
+    for (const o of arr) {
+      // Deine Tabelle zählt ab 1, unser Index ab 0 → normalisieren:
+      const idx = (o.id != null) ? (Number(o.id)-1) : null;
+      if (idx == null || idx < 0) continue;
+      GEOM.set(idx, {
+        is_axis: !!o.is_axis,
+        rarity_score: Number(o.rarity_score ?? NaN),
+        digit_pi: o.digit_pi,
+        digit_phi: o.digit_phi,
+        tier: o.tier
+      });
+    }
+  } catch (_) {}
+}
+
+/* ===========================================
+   LAYOUT: ZENTRIERTE PYRAMIDE
+   Reihe r hat 1+2r Spalten, Startindex r^2
+   =========================================== */
 function layoutPyramid() {
   const unit = CFG.TILE + CFG.GAP;
-  const maxCols = 1 + (CFG.ROWS - 1) * 2;
+  const maxCols = 1 + (CFG.ROWS - 1) * 2; // breiteste Reihe ganz unten
   stage.style.width = (maxCols * unit - CFG.GAP) + "px";
 
   let y = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
     const cols = 1 + row * 2;
-    const rowStartIndex = row * row;
-    const xOffset = ((maxCols - cols) / 2) * unit;
+    const rowStartIndex = row * row; // Startindex dieser Reihe
+    const xOffset = ((maxCols - cols) / 2) * unit; // **zentriert**
     let x = xOffset;
 
     for (let c = 0; c < cols; c++) {
       const index = rowStartIndex + c;
+
       const el = document.createElement("div");
       el.className = "tile";
       el.dataset.index = String(index);
@@ -58,17 +104,29 @@ function layoutPyramid() {
       el.addEventListener("click", onTileClick);
       el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") onTileClick({ currentTarget: el }); });
 
-      // Default: Bild
+      // Default: Thumbnail
       const img = document.createElement("img");
       img.alt = `#${index}`;
       img.src = `${CFG.API}/thumb/${index}`;
       img.onerror = ()=> el.classList.add("failed");
       el.appendChild(img);
 
+      // Badge für π-Digit
       const badge = document.createElement("div");
       badge.className = "digit";
       badge.textContent = "";
       el.appendChild(badge);
+
+      // Falls GEOM schon da ist, gleich Achse/Rarity vorbelegen
+      const g = GEOM.get(index);
+      if (g) {
+        if (g.is_axis) el.classList.add("axis");
+        if (Number.isFinite(g.rarity_score)) {
+          const norm = Math.max(0, Math.min(1, g.rarity_score / 10)); // grobe Normierung 0..10 → 0..1
+          el.style.setProperty("--rar", String(norm));
+          el.setAttribute("data-heat","1"); // für CSS-Overlay
+        }
+      }
 
       stage.appendChild(el);
       x += unit;
@@ -76,54 +134,96 @@ function layoutPyramid() {
     y += unit;
   }
   stage.style.height = (unit * CFG.ROWS - CFG.GAP) + "px";
-
-  requestAnimationFrame(()=>{
-    const midX = Math.max(0, (stage.scrollWidth - stageWrap.clientWidth) / 2);
-    stageWrap.scrollTo({ left: midX, top: 0, behavior: "auto" });
-  });
 }
 
-// === Zoom
-function setScale(s) {
+/* ===========================================
+   ZOOM & INITIAL VIEW
+   =========================================== */
+function setScale(s, { noSwap = false } = {}) {
   const prev = scale;
   scale = Math.max(0.2, Math.min(6, s));
   stage.style.transform = `scale(${scale})`;
   zoomLevel.textContent = Math.round(scale * 100) + "%";
+
   const crossed =
     (prev < CFG.SCALE_IMG_THRESHOLD && scale >= CFG.SCALE_IMG_THRESHOLD) ||
     (prev >= CFG.SCALE_IMG_THRESHOLD && scale < CFG.SCALE_IMG_THRESHOLD);
-  if (crossed) visibleSwap(); // nur sichtbare Tiles prüfen
+
+  if (!noSwap && crossed) visibleSwap();
 }
-zoomInBtn.onclick  = () => setScale(scale + .1);
-zoomOutBtn.onclick = () => setScale(scale - .1);
+
+function centerOnApex() {
+  // horizontal zentriert, vertikal ganz oben (Apex = #0)
+  const midX = Math.max(0, (stage.scrollWidth * scale - stageWrap.clientWidth) / 2);
+  stageWrap.scrollTo({ left: midX, top: 0, behavior: "auto" });
+}
+
+/** Erst-View: so zoomen, dass die ersten N Reihen exakt passen */
+function setInitialView() {
+  const unit = CFG.TILE + CFG.GAP;
+  const wanted = CFG.INITIAL_ROWS_VISIBLE * unit - CFG.GAP;
+  const h = Math.max(100, stageWrap.clientHeight);
+  const targetScale = Math.max(0.2, Math.min(6, h / wanted));
+
+  setScale(targetScale, { noSwap: true });
+  requestAnimationFrame(() => {
+    centerOnApex();
+    // Erstes Medien-Setup
+    visibleSwap();
+    // **Wunsch:** Erste N Reihen direkt als Video
+    forceVideoForTopRows(CFG.INITIAL_ROWS_VISIBLE);
+  });
+}
+
+/* Zoom-Controls */
+zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); };
+zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); };
+
+/* Pinch/Ctrl+Scroll */
 stageWrap.addEventListener("wheel", (e)=>{
   if (!e.ctrlKey) return;
   e.preventDefault();
+  userInteracted = true;
   setScale(scale + (e.deltaY < 0 ? .1 : -.1));
 }, { passive: false });
 
-closeModal.onclick = () => modal.classList.add("hidden");
-function showModal(html){ modalContent.innerHTML = html; modal.classList.remove("hidden"); }
-function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
+["scroll","keydown","pointerdown","touchstart"].forEach(evt=>{
+  window.addEventListener(evt, ()=> userInteracted = true, { passive:true });
+});
 
-// === Meta/Status Batches
+/* ===========================================
+   BATCH-LADER: META + STATUS
+   =========================================== */
 async function loadMetaBatch(from, to) {
   const { data } = await api(`/batch/meta?from=${from}&to=${to}`);
   data.forEach(meta=>{
     const i = meta.index;
     const el = tile(i);
     if (!el) return;
+
+    // π-Digit aus API-Attributes (Fallback: GEOM)
     const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
     const by = (k) => attrs.find(a => (a.trait_type||"").toLowerCase() === k);
-
-    const digit = by("digit")?.value ?? meta.Digit;
-    const axis  = by("axis")?.value ?? meta.Axis;
-    const pair  = by("matchingpair")?.value ?? meta.MatchingPair;
+    const digit = by("digit")?.value ?? meta.Digit ?? GEOM.get(i)?.digit_pi;
+    const axis  = by("axis")?.value ?? meta.Axis ?? (GEOM.get(i)?.is_axis ? "true" : null);
 
     const badge = el.querySelector(".digit");
     if (badge && digit != null) badge.textContent = String(digit);
     if (axis === true || axis === "true") el.classList.add("axis");
-    if (pair === true || pair === "true") el.classList.add("pair");
+
+    // Rarity aus Meta (oder GEOM), als Overlay-Heat
+    const rarity =
+      meta.rarity_score ??
+      (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarity_score")?.value) ??
+      (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarityscore")?.value) ??
+      GEOM.get(i)?.rarity_score;
+    if (rarity != null) {
+      const s = Number(rarity);
+      // Normierung 0..100 → 0..1; falls 0..10 in den GEOMs, passt das auch
+      const norm = Math.max(0, Math.min(1, s > 10 ? s/100 : s/10));
+      el.style.setProperty("--rar", String(norm));
+      el.setAttribute("data-heat","1");
+    }
   });
 }
 
@@ -132,19 +232,32 @@ async function loadStatusBatch(from, to) {
   data.forEach(s => {
     const el = tile(s.index);
     if (!el) return;
+
     if (!s.minted) el.dataset.status = "unminted";
     else if (s.listed) el.dataset.status = "listed";
     else if (s.verified) el.dataset.status = "verified";
-    // NEU: grün für „freshBought“
+
     if (s.freshBought) el.classList.add("fresh");
+
+    if (s.market && s.market !== "none") {
+      el.dataset.market = s.market; // "me" | "okx" | "both"
+      const t = el.getAttribute("title") || `#${s.index}`;
+      const marketTxt = s.market === "both" ? "ME + OKX" : (s.market.toUpperCase());
+      el.title = `${t} — listed on ${marketTxt}`;
+    } else {
+      el.dataset.market = "none";
+    }
   });
 }
 
-// === Modal-Detail
+/* ===========================================
+   DETAIL-MODAL
+   =========================================== */
 async function onTileClick(e) {
   const el = e.currentTarget;
   const idx = parseInt(el.dataset.index);
   focusedIndex = idx;
+
   const meta = await api(`/meta/${idx}`);
   const links = meta.links || {};
   const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
@@ -152,11 +265,12 @@ async function onTileClick(e) {
   const rarityScore =
     meta.rarity_score ??
     (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarity_score")?.value) ??
-    (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarityscore")?.value);
+    (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarityscore")?.value) ??
+    GEOM.get(idx)?.rarity_score;
 
-  const digit = (attrs.find(a => (a.trait_type||"").toLowerCase() === "digit")?.value);
-  const axis  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "axis")?.value);
-  const pair  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "matchingpair")?.value);
+  const digit = (attrs.find(a => (a.trait_type||"").toLowerCase() === "digit")?.value) ?? GEOM.get(idx)?.digit_pi;
+  const axis  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "axis")?.value) ?? (GEOM.get(idx)?.is_axis ? "true" : "");
+  const pair  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "matchingpair")?.value) ?? "";
 
   const rows = [
     ["Index", `#${idx}`],
@@ -189,26 +303,18 @@ async function onTileClick(e) {
   `);
 }
 
-// === Sichtbarkeits-Logik (VIDEOS NUR IM SICHTBEREICH)
-const io = new IntersectionObserver((entries)=>{
-  for (const ent of entries) {
-    const el = ent.target;
-    if (!(el instanceof HTMLElement)) continue;
-    toggleTileMedia(el, ent.isIntersecting);
-  }
-}, {
-  root: stageWrap,
-  rootMargin: "256px 0px",  // etwas Vorlauf
-  threshold: 0.25            // 25% sichtbar reicht
-});
+/* ===========================================
+   MEDIEN-STEUERUNG
+   =========================================== */
 
+// Schaltet EIN Tile um je nach Sichtbarkeit + Zoom
 function toggleTileMedia(el, isVisible) {
   const idx = parseInt(el.dataset.index);
   if (el.classList.contains("failed")) return;
 
   const wantVideo = isVisible && scale >= CFG.SCALE_IMG_THRESHOLD;
-
   const hasVideo = !!el.querySelector("video");
+
   if (wantVideo && !hasVideo) {
     const v = document.createElement("video");
     v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
@@ -227,18 +333,43 @@ function toggleTileMedia(el, isVisible) {
   }
 }
 
-// Nur sichtbare Tiles swappen (bei Zoom & Scroll)
+// Nur sichtbare Tiles prüfen (Scroll/Zoom)
 function visibleSwap() {
-  const tiles = stage.querySelectorAll(".tile");
-  tiles.forEach(el=>{
+  const wrapRect = stageWrap.getBoundingClientRect();
+  for (const el of stage.children) {
     const rect = el.getBoundingClientRect();
-    const wrapRect = stageWrap.getBoundingClientRect();
     const visible = !(rect.right < wrapRect.left || rect.left > wrapRect.right || rect.bottom < wrapRect.top || rect.top > wrapRect.bottom);
     toggleTileMedia(el, visible);
-  });
+  }
 }
 
-// Vorsichtiges Preload (optional)
+// Erste N Reihen sofort auf Video setzen (auch wenn Schwelle erfüllt)
+function forceVideoForTopRows(N) {
+  for (let i=0;i<TOTAL;i++){
+    const r = rowOf(i);
+    if (r >= N) break;
+    const el = tile(i);
+    if (!el) continue;
+    toggleTileMedia(el, true); // treat as visible
+  }
+}
+
+// IntersectionObserver – live Umschalten
+const io = new IntersectionObserver((entries)=>{
+  for (const ent of entries) {
+    const el = ent.target;
+    if (!(el instanceof HTMLElement)) continue;
+    toggleTileMedia(el, ent.isIntersecting);
+  }
+}, {
+  root: stageWrap,
+  rootMargin: "256px 0px", // Preload-Puffer
+  threshold: 0.25
+});
+
+/* ===========================================
+   OPTIONAL: volles Preload (manuell via Checkbox)
+   =========================================== */
 async function preloadAllVideos() {
   const conc = CFG.PRELOAD_CONCURRENCY;
   let next = 0;
@@ -264,14 +395,17 @@ async function preloadAllVideos() {
 }
 preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
-// Lazy-Batches pro sichtbarer Zeile
+/* ===========================================
+   SCROLL-LADER (Lazy-Batches je sichtbarer Zeile)
+   =========================================== */
 let lastScrollY = 0;
 stageWrap.addEventListener("scroll", ()=> {
   const y = stageWrap.scrollTop / (scale || 1);
   if (Math.abs(y - lastScrollY) < 64) return;
   lastScrollY = y;
-  const rowHeight = CFG.TILE + CFG.GAP;
-  const row = Math.floor(y / rowHeight);
+
+  const unit = CFG.TILE + CFG.GAP;
+  const row = Math.floor(y / unit);
   const windowRows = [row-2, row-1, row, row+1, row+2].filter(r => r>=0 && r<CFG.ROWS);
   windowRows.forEach(r=>{
     const from = r*r;
@@ -280,10 +414,12 @@ stageWrap.addEventListener("scroll", ()=> {
     loadStatusBatch(from, to).catch(()=>{});
   });
 
-  // Sichtbar-Swap triggern
   visibleSwap();
 }, { passive:true });
 
+/* ===========================================
+   NAVIGATION (Jump & Keyboard)
+   =========================================== */
 function scrollToIndex(i, open = false) {
   const t = tile(i); if (!t) return;
   stageWrap.scrollTo({ left: t.offsetLeft*scale-100, top: t.offsetTop*scale-100, behavior: "smooth" });
@@ -292,11 +428,11 @@ function scrollToIndex(i, open = false) {
 }
 jumpBtn.onclick = () => {
   const i = parseInt(jumpTo.value);
-  if (Number.isFinite(i) && i >= 0 && i < TOTAL) scrollToIndex(i, false);
+  if (Number.isFinite(i) && i >= 0 && i < TOTAL) { userInteracted = true; scrollToIndex(i, false); }
 };
 
-// Tastatur
 document.addEventListener("keydown", (e)=>{
+  userInteracted = true;
   if (e.key === "+" || e.key === "=") setScale(scale+.1);
   else if (e.key === "-" || e.key === "_") setScale(scale-.1);
   else if (e.key.toLowerCase() === "f") scrollToIndex(focusedIndex, true);
@@ -304,33 +440,9 @@ document.addEventListener("keydown", (e)=>{
   else if (e.key === "ArrowUp") { focusedIndex = Math.max(0, focusedIndex-1); scrollToIndex(focusedIndex); }
 });
 
-toggleRarity.addEventListener("change", async ()=>{
-  if (!toggleRarity.checked) {
-    for (const el of stage.children) { el.style.setProperty("--heat","0"); el.removeAttribute("data-heat"); }
-    return;
-  }
-  const windowSize = 200;
-  for (let f=0; f<TOTAL; f+=windowSize) {
-    const t = Math.min(TOTAL-1, f+windowSize-1);
-    const { data } = await api(`/batch/meta?from=${f}&to=${t}`);
-    data.forEach(meta=>{
-      const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
-      const score =
-        meta.rarity_score ??
-        (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarity_score")?.value) ??
-        (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarityscore")?.value);
-      if (score != null) {
-        const el = tile(meta.index); if (!el) return;
-        const s = Number(score);
-        const norm = Math.max(0, Math.min(1, (s - CFG.RARITY_MIN) / (CFG.RARITY_MAX - CFG.RARITY_MIN)));
-        el.style.setProperty("--heat", String(norm * 0.65));
-        el.setAttribute("data-heat","1");
-      }
-    });
-  }
-});
-
-// Events (SSE) – mit korrektem MIME kommt jetzt kein HTML mehr an
+/* ===========================================
+   SSE (Heartbeats)
+   =========================================== */
 function connectEvents() {
   try {
     const es = new EventSource(`${CFG.API}/events`);
@@ -338,14 +450,17 @@ function connectEvents() {
   } catch {}
 }
 
-// Init
-layoutPyramid();
-
-// IntersectionObserver an alle Tiles hängen
-Array.from(stage.children).forEach(el => io.observe(el));
-
-// Start: Meta/Status laden und Top-10-Reihen als Video setzen
+/* ===========================================
+   BOOT
+   =========================================== */
 (async ()=>{
+  await loadGeom();      // Achsen/Rarity vorbereiten
+  layoutPyramid();       // Tiles erzeugen
+  Array.from(stage.children).forEach(el => io.observe(el)); // Sichtbarkeit beobachten
+  requestAnimationFrame(setInitialView);  // Apex-View & Top-Reihen als Video
+  connectEvents();
+
+  // Meta & Status in Wellen (bremst Browser nicht aus)
   const windowSize = 300;
   for (let f=0; f<TOTAL; f+=windowSize) {
     const t = Math.min(TOTAL-1, f+windowSize-1);
@@ -353,21 +468,4 @@ Array.from(stage.children).forEach(el => io.observe(el));
     loadStatusBatch(f, t).catch(()=>{});
     await new Promise(r=>setTimeout(r, 40));
   }
-
-  // Erste 10 Reihen direkt Video
-  for (let row = 0; row < Math.min(CFG.INITIAL_VIDEO_ROWS, CFG.ROWS); row++) {
-    const from = row*row;
-    const to = from + (1 + row*2) - 1;
-    for (let i=from; i<=to; i++) {
-      const el = tile(i);
-      if (!el) continue;
-      toggleTileMedia(el, true);
-    }
-  }
-
-  // Rest anhand Sichtbarkeit/Zoom
-  visibleSwap();
-  connectEvents();
 })();
-
-// Kein Service Worker Cache auf /api/events (siehe SW-Datei)
