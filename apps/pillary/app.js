@@ -1,26 +1,21 @@
 /* ===========================================
-   Pi Pillary – Cheops Pyramid Gallery
-   - Apex (#0) oben, zentriert
-   - Erste N Reihen sofort als VIDEO
-   - Sonst PNG; Videos erst im Sichtbereich / ab Zoom
-   - Achsen & Rarity aus pi_phi_table.json (optional)
+   Pi Pillary – zentrale Zahlen-Pyramide (Cheops-Stil)
    =========================================== */
 
 /* ========= CONFIG ========= */
 const CFG = {
-  API: "https://inpinity.online/pillary/api", // absolut -> immer dein Worker
+  // Wenn du im Browser über https://inpinity.online/pillary aufrufst,
+  // kannst du auch "/pillary/api" nehmen. Für Tests auf der Pages-URL nimm die absolute:
+  API: "https://inpinity.online/pillary/api",
   ROWS: 100,
   TILE: 32,
-  GAP: 4,                  // 0 = Kante-auf-Kante
-  PRELOAD_CONCURRENCY: 4,  // optionales Voll-Preload per Checkbox
-  SCALE_IMG_THRESHOLD: 0.7, // ab welchem Zoom Videos (wenn sichtbar)
-  INITIAL_ROWS_VISIBLE: 10,  // wie viele Reihen anfänglich exakt sichtbar
-
-  // Geometrie/Rarity-Tabelle (π/φ, Achse, Rarity)
-  GEOM_URL: "/pillary/pi_phi_table.json", // lege die Datei so ab
+  GAP: 4,                     // 0 = Kante-auf-Kante
+  PRELOAD_CONCURRENCY: 4,     // optionales Voll-Preload (Checkbox)
+  SCALE_IMG_THRESHOLD: 0.7,   // ab diesem Zoom Videos (wenn sichtbar)
+  INITIAL_ROWS_VISIBLE: 10     // erste N Reihen sollen anfänglich genau in die Höhe passen
 };
 
-/* ========= DOM HOOKS ========= */
+/* ========= DOM ========= */
 const stage = document.getElementById("stage");
 const stageWrap = document.getElementById("stageWrap");
 const zoomInBtn = document.getElementById("zoomIn");
@@ -40,54 +35,35 @@ let focusedIndex = 0;
 let userInteracted = false;
 const TOTAL = CFG.ROWS * CFG.ROWS;
 
-// GEOM-Daten-Cache: index -> { is_axis, rarity_score, digit_pi, ... }
-const GEOM = new Map();
-
 /* ========= API Helper ========= */
 const api = (p) => fetch(`${CFG.API}${p}`).then(r => {
   if (!r.ok) throw new Error(`API ${p} -> ${r.status}`);
   return r.json();
 });
 
-/* ========= Utility ========= */
-function rowOf(index){ return Math.floor(Math.sqrt(index)); }
+/* ========= Utils ========= */
 function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
 
-/* ========= Geometrie-Daten laden (optional, aber empfohlen) ========= */
-async function loadGeom() {
-  try {
-    const res = await fetch(CFG.GEOM_URL, { cache: "force-cache" });
-    if (!res.ok) return;
-    const arr = await res.json();
-    for (const o of arr) {
-      // Deine Tabelle zählt ab 1, unser Index ab 0 → normalisieren:
-      const idx = (o.id != null) ? (Number(o.id)-1) : null;
-      if (idx == null || idx < 0) continue;
-      GEOM.set(idx, {
-        is_axis: !!o.is_axis,
-        rarity_score: Number(o.rarity_score ?? NaN),
-        digit_pi: o.digit_pi,
-        digit_phi: o.digit_phi,
-        tier: o.tier
-      });
-    }
-  } catch (_) {}
-}
-
 /* ===========================================
-   LAYOUT: ZENTRIERTE PYRAMIDE
-   Reihe r hat 1+2r Spalten, Startindex r^2
+   LAYOUT: zentrale Zahlen-Pyramide
+   Reihe r hat 2r+1 Blöcke; Startindex = r²
+   → #0 oben alleine; darunter 1..3; darunter 4..8; etc.
    =========================================== */
 function layoutPyramid() {
   const unit = CFG.TILE + CFG.GAP;
-  const maxCols = 1 + (CFG.ROWS - 1) * 2; // breiteste Reihe ganz unten
+
+  // breiteste Reihe (unten) hat 2*(ROWS-1)+1 Spalten
+  const maxCols = 2*(CFG.ROWS - 1) + 1;
   stage.style.width = (maxCols * unit - CFG.GAP) + "px";
 
   let y = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
-    const cols = 1 + row * 2;
-    const rowStartIndex = row * row; // Startindex dieser Reihe
-    const xOffset = ((maxCols - cols) / 2) * unit; // **zentriert**
+    const cols = 2*row + 1;          // 1,3,5,7,...
+    const rowStartIndex = row*row;   // 0,1,4,9,16,...
+    const mid = Math.floor(cols/2);  // mittlerer Block dieser Reihe
+
+    // so ausrichten, dass der mittlere Block unter der zentralen Achse liegt
+    const xOffset = ((maxCols / 2) - mid) * unit;
     let x = xOffset;
 
     for (let c = 0; c < cols; c++) {
@@ -101,32 +77,22 @@ function layoutPyramid() {
       el.style.left = x + "px";
       el.style.top = y + "px";
       el.style.width = el.style.height = CFG.TILE + "px";
+
       el.addEventListener("click", onTileClick);
       el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") onTileClick({ currentTarget: el }); });
 
-      // Default: Thumbnail
+      // Standard: zunächst Thumbnail
       const img = document.createElement("img");
       img.alt = `#${index}`;
       img.src = `${CFG.API}/thumb/${index}`;
       img.onerror = ()=> el.classList.add("failed");
       el.appendChild(img);
 
-      // Badge für π-Digit
+      // Badge für Ziffer (wird via Meta befüllt)
       const badge = document.createElement("div");
       badge.className = "digit";
       badge.textContent = "";
       el.appendChild(badge);
-
-      // Falls GEOM schon da ist, gleich Achse/Rarity vorbelegen
-      const g = GEOM.get(index);
-      if (g) {
-        if (g.is_axis) el.classList.add("axis");
-        if (Number.isFinite(g.rarity_score)) {
-          const norm = Math.max(0, Math.min(1, g.rarity_score / 10)); // grobe Normierung 0..10 → 0..1
-          el.style.setProperty("--rar", String(norm));
-          el.setAttribute("data-heat","1"); // für CSS-Overlay
-        }
-      }
 
       stage.appendChild(el);
       x += unit;
@@ -137,7 +103,7 @@ function layoutPyramid() {
 }
 
 /* ===========================================
-   ZOOM & INITIAL VIEW
+   ZOOM & INITIAL VIEW (erste N Reihen passend)
    =========================================== */
 function setScale(s, { noSwap = false } = {}) {
   const prev = scale;
@@ -153,12 +119,12 @@ function setScale(s, { noSwap = false } = {}) {
 }
 
 function centerOnApex() {
-  // horizontal zentriert, vertikal ganz oben (Apex = #0)
+  // horizontal zentriert, vertikal oben (Apex = #0)
   const midX = Math.max(0, (stage.scrollWidth * scale - stageWrap.clientWidth) / 2);
   stageWrap.scrollTo({ left: midX, top: 0, behavior: "auto" });
 }
 
-/** Erst-View: so zoomen, dass die ersten N Reihen exakt passen */
+/** Erst-View: zoomt so, dass die ersten N Reihen exakt in die Höhe passen */
 function setInitialView() {
   const unit = CFG.TILE + CFG.GAP;
   const wanted = CFG.INITIAL_ROWS_VISIBLE * unit - CFG.GAP;
@@ -168,10 +134,8 @@ function setInitialView() {
   setScale(targetScale, { noSwap: true });
   requestAnimationFrame(() => {
     centerOnApex();
-    // Erstes Medien-Setup
-    visibleSwap();
-    // **Wunsch:** Erste N Reihen direkt als Video
-    forceVideoForTopRows(CFG.INITIAL_ROWS_VISIBLE);
+    visibleSwap();                 // sichtbare Tiles einmal prüfen
+    forceVideoForTopRows(CFG.INITIAL_ROWS_VISIBLE); // erste N Reihen direkt Video
   });
 }
 
@@ -192,7 +156,7 @@ stageWrap.addEventListener("wheel", (e)=>{
 });
 
 /* ===========================================
-   BATCH-LADER: META + STATUS
+   META + STATUS (Batch)
    =========================================== */
 async function loadMetaBatch(from, to) {
   const { data } = await api(`/batch/meta?from=${from}&to=${to}`);
@@ -201,29 +165,17 @@ async function loadMetaBatch(from, to) {
     const el = tile(i);
     if (!el) return;
 
-    // π-Digit aus API-Attributes (Fallback: GEOM)
     const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
     const by = (k) => attrs.find(a => (a.trait_type||"").toLowerCase() === k);
-    const digit = by("digit")?.value ?? meta.Digit ?? GEOM.get(i)?.digit_pi;
-    const axis  = by("axis")?.value ?? meta.Axis ?? (GEOM.get(i)?.is_axis ? "true" : null);
+
+    const digit = by("digit")?.value ?? meta.Digit;
+    const axis  = by("axis")?.value ?? meta.Axis;
+    const pair  = by("matchingpair")?.value ?? meta.MatchingPair;
 
     const badge = el.querySelector(".digit");
     if (badge && digit != null) badge.textContent = String(digit);
     if (axis === true || axis === "true") el.classList.add("axis");
-
-    // Rarity aus Meta (oder GEOM), als Overlay-Heat
-    const rarity =
-      meta.rarity_score ??
-      (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarity_score")?.value) ??
-      (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarityscore")?.value) ??
-      GEOM.get(i)?.rarity_score;
-    if (rarity != null) {
-      const s = Number(rarity);
-      // Normierung 0..100 → 0..1; falls 0..10 in den GEOMs, passt das auch
-      const norm = Math.max(0, Math.min(1, s > 10 ? s/100 : s/10));
-      el.style.setProperty("--rar", String(norm));
-      el.setAttribute("data-heat","1");
-    }
+    if (pair === true || pair === "true") el.classList.add("pair");
   });
 }
 
@@ -232,13 +184,12 @@ async function loadStatusBatch(from, to) {
   data.forEach(s => {
     const el = tile(s.index);
     if (!el) return;
-
     if (!s.minted) el.dataset.status = "unminted";
     else if (s.listed) el.dataset.status = "listed";
     else if (s.verified) el.dataset.status = "verified";
-
     if (s.freshBought) el.classList.add("fresh");
 
+    // Market-Badge optional
     if (s.market && s.market !== "none") {
       el.dataset.market = s.market; // "me" | "okx" | "both"
       const t = el.getAttribute("title") || `#${s.index}`;
@@ -265,12 +216,11 @@ async function onTileClick(e) {
   const rarityScore =
     meta.rarity_score ??
     (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarity_score")?.value) ??
-    (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarityscore")?.value) ??
-    GEOM.get(idx)?.rarity_score;
+    (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarityscore")?.value);
 
-  const digit = (attrs.find(a => (a.trait_type||"").toLowerCase() === "digit")?.value) ?? GEOM.get(idx)?.digit_pi;
-  const axis  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "axis")?.value) ?? (GEOM.get(idx)?.is_axis ? "true" : "");
-  const pair  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "matchingpair")?.value) ?? "";
+  const digit = (attrs.find(a => (a.trait_type||"").toLowerCase() === "digit")?.value);
+  const axis  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "axis")?.value);
+  const pair  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "matchingpair")?.value);
 
   const rows = [
     ["Index", `#${idx}`],
@@ -304,10 +254,8 @@ async function onTileClick(e) {
 }
 
 /* ===========================================
-   MEDIEN-STEUERUNG
+   MEDIEN-STEUERUNG (Video nur im Sichtbereich / ab Zoom)
    =========================================== */
-
-// Schaltet EIN Tile um je nach Sichtbarkeit + Zoom
 function toggleTileMedia(el, isVisible) {
   const idx = parseInt(el.dataset.index);
   if (el.classList.contains("failed")) return;
@@ -333,7 +281,6 @@ function toggleTileMedia(el, isVisible) {
   }
 }
 
-// Nur sichtbare Tiles prüfen (Scroll/Zoom)
 function visibleSwap() {
   const wrapRect = stageWrap.getBoundingClientRect();
   for (const el of stage.children) {
@@ -343,18 +290,21 @@ function visibleSwap() {
   }
 }
 
-// Erste N Reihen sofort auf Video setzen (auch wenn Schwelle erfüllt)
 function forceVideoForTopRows(N) {
-  for (let i=0;i<TOTAL;i++){
-    const r = rowOf(i);
-    if (r >= N) break;
-    const el = tile(i);
-    if (!el) continue;
-    toggleTileMedia(el, true); // treat as visible
+  // treat as visible, damit Top-Reihen sofort als Video kommen
+  const unit = CFG.TILE + CFG.GAP;
+  for (let row = 0; row < Math.min(N, CFG.ROWS); row++) {
+    const cols = 2*row + 1;
+    const start = row*row;
+    const end = start + cols - 1;
+    for (let i = start; i <= end; i++) {
+      const el = tile(i);
+      if (el) toggleTileMedia(el, true);
+    }
   }
 }
 
-// IntersectionObserver – live Umschalten
+// IntersectionObserver für Live-Umschalten
 const io = new IntersectionObserver((entries)=>{
   for (const ent of entries) {
     const el = ent.target;
@@ -363,12 +313,12 @@ const io = new IntersectionObserver((entries)=>{
   }
 }, {
   root: stageWrap,
-  rootMargin: "256px 0px", // Preload-Puffer
+  rootMargin: "256px 0px",
   threshold: 0.25
 });
 
 /* ===========================================
-   OPTIONAL: volles Preload (manuell via Checkbox)
+   OPTIONAL: Preload-Checkbox
    =========================================== */
 async function preloadAllVideos() {
   const conc = CFG.PRELOAD_CONCURRENCY;
@@ -396,7 +346,7 @@ async function preloadAllVideos() {
 preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
 /* ===========================================
-   SCROLL-LADER (Lazy-Batches je sichtbarer Zeile)
+   SCROLL: Lazy-Batches je sichtbarer Zeile
    =========================================== */
 let lastScrollY = 0;
 stageWrap.addEventListener("scroll", ()=> {
@@ -409,7 +359,7 @@ stageWrap.addEventListener("scroll", ()=> {
   const windowRows = [row-2, row-1, row, row+1, row+2].filter(r => r>=0 && r<CFG.ROWS);
   windowRows.forEach(r=>{
     const from = r*r;
-    const to = from + (1 + r*2) - 1;
+    const to   = from + (2*r + 1) - 1; // start + cols - 1
     loadMetaBatch(from, to).catch(()=>{});
     loadStatusBatch(from, to).catch(()=>{});
   });
@@ -418,7 +368,7 @@ stageWrap.addEventListener("scroll", ()=> {
 }, { passive:true });
 
 /* ===========================================
-   NAVIGATION (Jump & Keyboard)
+   NAVIGATION
    =========================================== */
 function scrollToIndex(i, open = false) {
   const t = tile(i); if (!t) return;
@@ -441,7 +391,7 @@ document.addEventListener("keydown", (e)=>{
 });
 
 /* ===========================================
-   SSE (Heartbeats)
+   SSE Heartbeats
    =========================================== */
 function connectEvents() {
   try {
@@ -453,19 +403,20 @@ function connectEvents() {
 /* ===========================================
    BOOT
    =========================================== */
-(async ()=>{
-  await loadGeom();      // Achsen/Rarity vorbereiten
-  layoutPyramid();       // Tiles erzeugen
+(function boot(){
+  layoutPyramid();
   Array.from(stage.children).forEach(el => io.observe(el)); // Sichtbarkeit beobachten
-  requestAnimationFrame(setInitialView);  // Apex-View & Top-Reihen als Video
+  requestAnimationFrame(setInitialView);
   connectEvents();
 
   // Meta & Status in Wellen (bremst Browser nicht aus)
-  const windowSize = 300;
-  for (let f=0; f<TOTAL; f+=windowSize) {
-    const t = Math.min(TOTAL-1, f+windowSize-1);
-    loadMetaBatch(f, t).catch(()=>{});
-    loadStatusBatch(f, t).catch(()=>{});
-    await new Promise(r=>setTimeout(r, 40));
-  }
+  (async ()=>{
+    const windowSize = 300;
+    for (let f=0; f<TOTAL; f+=windowSize) {
+      const t = Math.min(TOTAL-1, f+windowSize-1);
+      loadMetaBatch(f, t).catch(()=>{});
+      loadStatusBatch(f, t).catch(()=>{});
+      await new Promise(r=>setTimeout(r, 40));
+    }
+  })();
 })();
