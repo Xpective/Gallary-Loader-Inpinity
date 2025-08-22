@@ -7,14 +7,30 @@ routes = [
   { pattern = "inpinity.online/pillary*", zone_name = "inpinity.online" }
 ]
 
-[vars]
-# Basis-Konfiguration
-PAGES_HOST = "gallary-loader-inpinity.pages.dev"
-JSON_BASE_CID = "bafybeibjqtwncnrsv4vtcnrqcck3bgecu3pfip7mwu4pcdenre5b7am7tu"  # Ordner mit 0.json..9999.json
-IPFS_GATEWAYS = "https://cloudflare-ipfs.com,https://ipfs.io,https://ipfs.inpinity.online"
+# Cron: alle 15 Minuten Prewarm
+triggers = { crons = ["*/15 * * * *"] }
 
-# Solana / Collection
+[vars]
+# --- WICHTIG: anpassen ---
+PAGES_HOST = "gallary-loader-inpinity.pages.dev"
+
+# JSON-Ordner mit 0.json..9999.json
+JSON_BASE_CID = "bafybeibjqtwncnrsv4vtcnrqcck3bgecu3pfip7mwu4pcdenre5b7am7tu"
+
+# Dein schnelles Gateway zuerst
+IPFS_GATEWAYS = "https://ipfs.inpinity.online,https://cloudflare-ipfs.com,https://ipfs.io"
+
+# Video-Qualitäten (wenn du nur eine hast, setze sie auf *_MED und lass LOW/HIGH leer)
+VIDEO_BASE_CID_LOW = ""
+VIDEO_BASE_CID_MED = "bafybeic6dwzp2lk3xf7wylsxo5kqqmvcgqlf6pp4v4ov3e2x6evrjipbam"
+VIDEO_BASE_CID_HIGH = ""
+
+# Solana/Collection
 COLLECTION_MINT = "6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"
+CREATOR = "GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp"
+RPC = "https://api.mainnet-beta.solana.com"
+
+# Collection-Info (wird bei /config ausgegeben)
 COLLECTION_NAME = "Pi Pyramide"
 COLLECTION_SYMBOL = "inpi"
 COLLECTION_DESCRIPTION = "10000 Pi Pyramid blocks"
@@ -22,7 +38,11 @@ COLLECTION_CHAIN = "solana"
 COLLECTION_STANDARD = "nft"
 ME_COLLECTION_SLUG = "inpi"
 COLLECTION_CERT_URL = "https://solscan.io/token/6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"
+OKX_TOKEN_URL = "https://web3.okx.com/ul/FOFXecp"
 
-# Creator & RPC
-CREATOR = "GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp"
-RPC = "https://api.mainnet-beta.solana.com"
+# --- Optional: R2-Mirror (empfohlen für Video-Turbo) ---
+# Im Dashboard einen Bucket z. B. "pillaries" anlegen und hier binden.
+# Lass die Section weg, wenn du (noch) kein R2 willst.
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "pillaries"
