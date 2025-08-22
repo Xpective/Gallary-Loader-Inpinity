@@ -170,6 +170,14 @@ function makeVideo(idx, posterUrl) {
 }
 
 function toggleTileMedia(el, isVisible) {
+  if (wantVideo && !hasVideo) {
+  if (playing.size >= MAX_PLAYING) {
+    // stoppe das älteste/weit entfernteste Video
+    const victim = [...playing][0]; 
+    victim?.pause(); victim?.closest('.tile')?.querySelector('img') || victim?.closest('.tile')?.prepend(Object.assign(document.createElement('img'),{src:`${CFG.API}/thumb/${parseInt(victim.closest('.tile').dataset.index)}`,alt:''}));
+  }
+  // dann Video erstellen wie gehabt
+
   const idx = parseInt(el.dataset.index);
   if (el.classList.contains("failed")) return;
 
