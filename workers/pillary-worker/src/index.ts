@@ -146,13 +146,29 @@ async function statusByIndex(env: Env, index: number) {
     const meta: any = await fetchJsonFromCid(env, `${index}.json`);
     const minted = Boolean(meta.mint);
     const verified = Boolean(meta.collection?.verified) || Boolean(meta.properties?.collection?.verified) || false;
-    // „listed“ kann aus JSON kommen; optional
-    const listed = Boolean(meta.listed ?? false);
-    // „freshBought“ optional (zum grünen Glow)
-    const freshBought = Boolean(meta.freshBought ?? false);
-    return { index, minted, verified, listed, freshBought };
+
+    // JSON-Flags (optional aus deinen Metas)
+    const listedFlag   = Boolean(meta.listed ?? false);
+    const freshBought  = Boolean(meta.freshBought ?? false);
+
+    let listed = listedFlag;
+    let market: "none"|"me"|"okx"|"both" = "none";
+
+    if (minted) {
+      if (listedFlag) {
+        // Falls im JSON bereits gesetzt – nimm’s als Wahrheit
+        market = "me";
+      } else if (meta.mint) {
+        // Live-Detection ohne Keys
+        const li = await combinedListingsNoKeys(meta.mint);
+        market = li.source;
+        listed = li.source !== "none";
+      }
+    }
+
+    return { index, minted, verified, listed, freshBought, market };
   } catch {
-    return { index, minted: false, verified: false, listed: false, freshBought: false };
+    return { index, minted: false, verified: false, listed: false, freshBought: false, market: "none" as const };
   }
 }
 
