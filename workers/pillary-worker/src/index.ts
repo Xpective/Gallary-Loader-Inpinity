@@ -156,6 +156,100 @@ async function statusByIndex(env: Env, index: number) {
   }
 }
 
+/** Öffentlicher ME-Endpoint (ohne Key): listet Angebote pro Mint, wenn vorhanden */
+async function fetchMEListingsNoKey(mint: string) {
+  const url = `https://api-mainnet.magiceden.dev/v2/tokens/${mint}/listings`;
+  // kurze TTL, damit UI zügig reagiert – Cache in fetchWithCache zusätzlich
+  const req = new Request(url, { headers: { accept: "application/json" } });
+  try {
+    const res = await fetch(req);
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json) ? json : [];
+  } catch {
+    return [];
+  }
+}
+
+/** OKX: öffetliche Web-Seite abrufen und Listings aus eingebettetem JSON herausparsen */
+async function detectOKXListingFromHtml(mint: string) {
+  const url = `https://www.okx.com/web3/market/nft/sol/${mint}`;
+  try {
+    const res = await fetch(new Request(url, { headers: { accept: "text/html" }}));
+    if (!res.ok) return { okxListed: false, count: 0 };
+
+    const html = await res.text();
+
+    // 1) Next.js: __NEXT_DATA__ JSON
+    const nextMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i);
+    if (nextMatch) {
+      try {
+        const data = JSON.parse(nextMatch[1]);
+        const str = JSON.stringify(data);
+        // sehr defensiv: zähle „listing“-Objekte
+        const m = str.match(/"listing[s]?"\s*:\s*\[/i);
+        if (m) {
+          // grobe Heuristik: Anzahl eckiger Klammern nach "listing"
+          const listMatches = str.match(/"price"|\"orderId\"|\"order_id\"/g);
+          return { okxListed: true, count: listMatches ? listMatches.length : 1 };
+        }
+      } catch {/* ignore */}
+    }
+
+    // 2) Nuxt: __NUXT__
+    const nuxtMatch = html.match(/window\.__NUXT__\s*=\s*({[\s\S]*?});/i);
+    if (nuxtMatch) {
+      try {
+        const data = JSON.parse(nuxtMatch[1]);
+        const str = JSON.stringify(data);
+        const m = str.match(/"listing[s]?"\s*:\s*\[/i);
+        if (m) {
+          const listMatches = str.match(/"price"|\"orderId\"|\"order_id\"/g);
+          return { okxListed: true, count: listMatches ? listMatches.length : 1 };
+        }
+      } catch {/* ignore */}
+    }
+
+    // 3) JSON-LD (fallback)
+    const ldMatches = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/gi)];
+    for (const m of ldMatches) {
+      try {
+        const data = JSON.parse(m[1]);
+        const str = JSON.stringify(data);
+        if (/listing/i.test(str)) {
+          return { okxListed: true, count: (str.match(/"price"/g) || []).length || 1 };
+        }
+      } catch {/* ignore */}
+    }
+
+    return { okxListed: false, count: 0 };
+  } catch {
+    return { okxListed: false, count: 0 };
+  }
+}
+
+/** Kombiniert ME (öffentlich) und OKX (HTML-Detektor) */
+async function combinedListingsNoKeys(mint: string) {
+  const [me, okx] = await Promise.all([
+    fetchMEListingsNoKey(mint),
+    detectOKXListingFromHtml(mint)
+  ]);
+
+  const meAny  = Array.isArray(me) && me.length > 0;
+  const okxAny = !!okx.okxListed;
+
+  let source: "none"|"me"|"okx"|"both" =
+    meAny && okxAny ? "both" : (meAny ? "me" : (okxAny ? "okx" : "none"));
+
+  return {
+    source,
+    meCount: meAny ? me.length : 0,
+    okxCount: okxAny ? okx.count : 0,
+  };
+}
+
+
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
