@@ -15,3 +15,12 @@ IPFS_GATEWAYS = "https://cloudflare-ipfs.com,https://ipfs.io,https://ipfs.inpini
 COLLECTION_MINT = "6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"
 CREATOR = "GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp"
 RPC = "https://api.mainnet-beta.solana.com"
+
+COLLECTION_MINT = "6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"
+COLLECTION_NAME = "Pi Pyramide"
+COLLECTION_SYMBOL = "inpi"
+COLLECTION_DESCRIPTION = "10000 Pi Pyramid blocks"
+COLLECTION_CHAIN = "solana"
+COLLECTION_STANDARD = "nft"
+ME_COLLECTION_SLUG = "inpi"
+COLLECTION_CERT_URL = "https://solscan.io/token/6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"
