@@ -273,7 +273,10 @@ async function combinedListingsNoKeys(mint: string) {
   };
 }
 
-
+function meCollectionUrl(env: Env) {
+  const slug = (env.ME_COLLECTION_SLUG || env.COLLECTION_SYMBOL || "").toString().trim().toLowerCase();
+  return slug ? `https://magiceden.io/marketplace/${slug}` : undefined;
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -282,10 +285,27 @@ export default {
 
     if (request.method === "OPTIONS") return ok({ ok: true }, { "cache-control": "no-store" });
 
-    if (pathname.endsWith("/pillary/api/health")) return ok({ ok:true, time:Date.now() });
-    if (pathname.endsWith("/pillary/api/config")) return ok({
-      pages: env.PAGES_HOST, cid: env.JSON_BASE_CID, gateways: gateways(env)
-    });
+    if (pathname.endsWith("/pillary/api/config")) {
+  // Magic Eden Collection URL nach Slug/Symbol bauen
+  const meSlug = (env.ME_COLLECTION_SLUG || env.COLLECTION_SYMBOL || "").toString().trim().toLowerCase();
+  const meCollectionUrl = meSlug ? `https://magiceden.io/marketplace/${meSlug}` : undefined;
+
+  return ok({
+    pages: env.PAGES_HOST,
+    cid: env.JSON_BASE_CID,
+    gateways: gateways(env),
+    collection: {
+      name: env.COLLECTION_NAME || "Pi Pyramide",
+      symbol: (env.COLLECTION_SYMBOL || "inpi").toLowerCase(),
+      description: env.COLLECTION_DESCRIPTION || "10000 Pi Pyramid blocks",
+      chain: env.COLLECTION_CHAIN || "solana",
+      standard: env.COLLECTION_STANDARD || "nft",
+      mint: env.COLLECTION_MINT || null,
+      certUrl: env.COLLECTION_CERT_URL || "https://solscan.io/token/6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ",
+      meCollectionUrl
+    }
+  });
+}
 
     if (/\/pillary\/api\/meta\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
