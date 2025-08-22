@@ -25,16 +25,12 @@ export interface Env {
   R2?: R2Bucket;
 }
 
+// (Workers hat R2Bucket-Typ, hier nur zur Sicherheit)
 type R2Bucket = {
   get(key: string, opts?: any): Promise<any>;
   put(key: string, value: any, opts?: any): Promise<any>;
   head?(key: string): Promise<any>;
 };
-
-.tile{
-  content-visibility: auto;
-  contain-intrinsic-size: 32px 32px; /* reserviert Platz ohne rendern */
-}
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -59,7 +55,7 @@ function gateways(env: Env) {
 }
 
 function toHttpFromIpfs(gw: string, uri: string) {
-  if (uri.startsWith("ipfs://")) return `${gw}/ipfs/${uri.slice("ipfs://".length)}`;
+  if (uri?.startsWith?.("ipfs://")) return `${gw}/ipfs/${uri.slice("ipfs://".length)}`;
   return uri;
 }
 
@@ -103,7 +99,6 @@ async function fetchJsonFromCid(env: Env, path: string) {
 
 function pickVideoCidsByQ(env: Env, q: string|undefined) {
   const tier = (q||"med").toLowerCase();
-  // Reihenfolge nach gewünschter Qualität
   const order = tier === "low" ? ["VIDEO_BASE_CID_LOW","VIDEO_BASE_CID_MED","VIDEO_BASE_CID_HIGH"]
               : tier === "high"? ["VIDEO_BASE_CID_HIGH","VIDEO_BASE_CID_MED","VIDEO_BASE_CID_LOW"]
                                : ["VIDEO_BASE_CID_MED","VIDEO_BASE_CID_HIGH","VIDEO_BASE_CID_LOW"];
@@ -119,16 +114,15 @@ function collectMediaCandidates(env: Env, meta: any, index?: number, q?: string)
   const arr: string[] = [];
   const push = (v: any) => { if (!v) return; if (Array.isArray(v)) v.forEach(push); else arr.push(String(v)); };
 
-  // 1) Direkter MP4-Folder (Qualität) hat höchste Priorität
+  // 1) Priorisierte Video-Ordner nach Qualität
   if (Number.isFinite(index)) {
     const cids = pickVideoCidsByQ(env, q);
     for (const gw of gateways(env)) for (const cid of cids) arr.push(`${gw}/ipfs/${cid}/${index}.mp4`);
   }
 
-  // 2) gängige Felder aus Metadata
+  // 2) Standardfelder aus Metadata
   push(meta.animation_url);
   push(meta.properties?.animation_url);
-
   const files = meta.properties?.files;
   if (Array.isArray(files)) {
     files.forEach((f:any)=>{
@@ -147,12 +141,14 @@ async function metaByIndex(env: Env, index: number) {
   const meta = await fetchJsonFromCid(env, `${index}.json`);
   const mint = meta.mint ?? meta.properties?.mint ?? null;
   const symbol = meta.symbol ?? meta.collection?.name ?? env.COLLECTION_SYMBOL ?? null;
+  const meSlug = (env.ME_COLLECTION_SLUG || symbol || "inpi")?.toString().trim().toLowerCase();
+
   const links = mint ? {
     magicEdenItem: `https://magiceden.io/item-details/${mint}`,
     okxNftItem:    `https://www.okx.com/web3/market/nft/sol/${mint}`,
-    magicEdenCollection: `https://magiceden.io/marketplace/${(env.ME_COLLECTION_SLUG||symbol||"").toString().toLowerCase() || "inpi"}`
+    magicEdenCollection: `https://magiceden.io/marketplace/${meSlug}`
   } : {
-    magicEdenCollection: `https://magiceden.io/marketplace/${(env.ME_COLLECTION_SLUG||symbol||"").toString().toLowerCase() || "inpi"}`
+    magicEdenCollection: `https://magiceden.io/marketplace/${meSlug}`
   };
   return { index, ...meta, links };
 }
@@ -168,7 +164,6 @@ async function statusByIndex(env: Env, index: number) {
     const minted = Boolean(meta.mint);
     const verified = Boolean(meta.collection?.verified) || Boolean(meta.properties?.collection?.verified) || false;
     const listed = Boolean(meta.listed ?? false);
-    // Optionale Märkte (könntest du später über Offchain-Indexing setzen)
     const market = meta.market ?? "none"; // "me" | "okx" | "both" | "none"
     return { index, minted, verified, listed, market };
   } catch {
@@ -176,7 +171,6 @@ async function statusByIndex(env: Env, index: number) {
   }
 }
 
-/** Proxy mit Range/Conditional-Headern + starkem Cache */
 async function proxyBinaryMulti(
   env: Env,
   uris: string[],
@@ -186,7 +180,6 @@ async function proxyBinaryMulti(
 ) {
   const gws = gateways(env);
   const candidates: string[] = [];
-  // httpify
   for (const uri of uris) for (const gw of gws) candidates.push(toHttpFromIpfs(gw, uri));
 
   let attempt = 0;
@@ -220,16 +213,13 @@ async function proxyBinaryMulti(
   return new Response("Upstream error", { status: 502, headers: CORS });
 }
 
-/** R2-Mirror für Videos: get → (Range) → stream; miss → von IPFS holen, in R2 legen, zurück */
 async function serveVideoWithR2(env: Env, index: number, q: string|undefined, clientHeaders: Headers) {
   const useR2 = !!env.R2;
   const r2Key = `video/${q||"med"}/${index}.mp4`;
 
-  // Range parsen (einfacher Fall: bytes=start-end)
   const range = clientHeaders.get("range");
   const wantsRange = !!range && /^bytes=\d*-\d*(,\d*-\d*)*$/.test(range);
 
-  // 1) R2 hit?
   if (useR2) {
     const obj = await env.R2!.get(r2Key, wantsRange ? { range } : undefined);
     if (obj) {
@@ -253,28 +243,25 @@ async function serveVideoWithR2(env: Env, index: number, q: string|undefined, cl
     }
   }
 
-  // 2) R2 miss → von IPFS (mit Priorität Video-CIDs)
   const meta = await metaByIndex(env, index);
   const cands = collectMediaCandidates(env, meta, index, q);
   const upstream = await proxyBinaryMulti(env, cands, "video/*", 86400, clientHeaders);
-  if (upstream.ok || upstream.status === 206) {
-    // 3) asynchron in R2 spiegeln (kein Blockieren)
-    if (useR2) {
-      const clone = upstream.clone();
-      clone.arrayBuffer().then(buf => {
-        env.R2!.put(r2Key, buf, {
-          httpMetadata: { contentType: clone.headers.get("content-type") || "video/mp4" }
-        }).catch(()=>{});
+
+  if ((upstream.ok || upstream.status === 206) && useR2) {
+    const clone = upstream.clone();
+    clone.arrayBuffer().then(buf => {
+      env.R2!.put(r2Key, buf, {
+        httpMetadata: { contentType: clone.headers.get("content-type") || "video/mp4" }
       }).catch(()=>{});
-    }
+    }).catch(()=>{});
   }
   return upstream;
 }
 
 export default {
+  // Hinweis: Nur aktiv, wenn du crons in wrangler.toml setzt
   async scheduled(_event: any, env: Env, _ctx: ExecutionContext) {
-    // Prewarm: Top 15 Reihen – Meta + Thumb + Video-HEAD
-    const preRows = 15;
+    const preRows = 12;
     const jobs: Promise<any>[] = [];
     for (let row=0; row<preRows; row++) {
       const cols = 2*row+1;
@@ -295,7 +282,7 @@ export default {
 
     if (request.method === "OPTIONS") return ok({ ok: true });
 
-    // Health & Config
+    // Health & reiches Config
     if (pathname.endsWith("/pillary/api/health")) return ok({ ok:true, time:Date.now() });
     if (pathname.endsWith("/pillary/api/config")) {
       const meSlug = (env.ME_COLLECTION_SLUG || env.COLLECTION_SYMBOL || "inpi").toString().trim().toLowerCase();
@@ -342,17 +329,15 @@ export default {
       const from = parseInt(searchParams.get("from") ?? "0");
       const to   = parseInt(searchParams.get("to") ?? "49");
       const jobs = Array.from({length: to-from+1}, (_,i)=> metaByIndexSafe(env, from+i));
-      const data = await Promise.all(jobs);
-      return ok({ from, to, data });
+      return ok({ from, to, data: await Promise.all(jobs) });
     }
 
-    // API: Video (mit Quality + R2-Mirror + Range)
+    // API: Video (Qualität + R2 + Range)
     if (/\/pillary\/api\/video\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
       const q = searchParams.get("q") || "med";
-      try {
-        return await serveVideoWithR2(env, idx, q, request.headers);
-      } catch {
+      try { return await serveVideoWithR2(env, idx, q, request.headers); }
+      catch {
         // Hard-Fallback
         try {
           const meta = await metaByIndex(env, idx);
@@ -362,7 +347,7 @@ export default {
       }
     }
 
-    // API: Thumb (Range unnötig, aber Cache stark)
+    // API: Thumb (starker Cache)
     if (/\/pillary\/api\/thumb\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
       try {
@@ -381,7 +366,7 @@ export default {
       } catch { return new Response("Upstream error", { status: 502, headers: CORS }); }
     }
 
-    // API: Events (SSE)
+    // SSE
     if (pathname.endsWith("/pillary/api/events")) {
       const stream = new ReadableStream({
         start: (controller) => {
@@ -402,7 +387,7 @@ export default {
       });
     }
 
-    // STATIC: /pillary* → Pages proxy (alles Nicht-API)
+    // STATIC: /pillary* → Pages proxy
     if (pathname.startsWith("/pillary") && !pathname.startsWith("/pillary/api/")) {
       const host = env.PAGES_HOST || "gallary-loader-inpinity.pages.dev";
       const targetUrl = new URL(`https://${host}${pathname.replace(/^\/pillary/, "") || "/"}`);
