@@ -10,6 +10,34 @@ const CFG = {
   SCALE_IMG_THRESHOLD: 0.7,
   INITIAL_ROWS_VISIBLE: 10
 };
+// oben bei CFG:
+const RENDER_MARGIN_ROWS = 6;
+
+const renderedRows = new Set();
+function createRow(row){ /* baue DOM der Reihe (wie bisher in layoutPyramid – nur für diese row) */ }
+function destroyRow(row){ const start=row*row, cols=2*row+1; for (let i=start;i<start+cols;i++){ const el=tile(i); el?.remove(); } }
+
+function updateRenderedRows() {
+  const unit = CFG.TILE + CFG.GAP;
+  const y = stageWrap.scrollTop / (scale || 1);
+  const topRow = Math.max(0, Math.floor(y / unit) - RENDER_MARGIN_ROWS);
+  const bottomRow = Math.min(CFG.ROWS-1, Math.floor((y + stageWrap.clientHeight/scale)/unit) + RENDER_MARGIN_ROWS);
+
+  // add missing
+  for (let r=topRow; r<=bottomRow; r++) if (!renderedRows.has(r)) {
+    createRow(r); renderedRows.add(r);
+  }
+  // remove far away
+  for (const r of [...renderedRows]) if (r < topRow-1 || r > bottomRow+1) {
+    destroyRow(r); renderedRows.delete(r);
+  }
+  visibleSwap();
+}
+stageWrap.addEventListener("scroll", updateRenderedRows, {passive:true});
+window.addEventListener("resize", updateRenderedRows, {passive:true});
+
+// Beim Boot: NUR Layout-Rahmen setzen (Stage-Größe), nicht alle Tiles bauen.
+// Danach: updateRenderedRows() aufrufen.
 
 /* ========= DOM Helper ========= */
 function reqEl(id) {
