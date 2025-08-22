@@ -1,15 +1,26 @@
+/* ===========================================
+   Pi Pillary – Gallery App
+   =========================================== */
+
+/* ========= CONFIG ========= */
 const CFG = {
   API: "/pillary/api",
   ROWS: 100,
   TILE: 32,
-  GAP: 4,                 // auf 0 setzen, wenn Kante-auf-Kante gewünscht
-  PRELOAD_CONCURRENCY: 4, // später gerne erhöhen
+  GAP: 4,                  // auf 0 setzen, wenn Kante-auf-Kante gewünscht
+  PRELOAD_CONCURRENCY: 4,  // manuelles Voll-Preload (Checkbox)
   RARITY_MIN: 0,
   RARITY_MAX: 100,
+
+  // Ab welchem Zoom-Faktor auf Video umschalten?
+  // < 0.7: Thumbs (PNG), >= 0.7: Videos (nur wenn sichtbar)
   SCALE_IMG_THRESHOLD: 0.7,
-  INITIAL_ROWS_VISIBLE: 10 // *** bis welche Reihe die Höhe initial passen soll
+
+  // Wie viele Reihen sollen initial vertikal genau ins Viewport-Fenster passen?
+  INITIAL_ROWS_VISIBLE: 10
 };
 
+/* ========= DOM HOOKS ========= */
 const stage = document.getElementById("stage");
 const stageWrap = document.getElementById("stageWrap");
 const zoomInBtn = document.getElementById("zoomIn");
@@ -23,31 +34,38 @@ const modal = document.getElementById("modal");
 const modalContent = document.getElementById("modalContent");
 const closeModal = document.getElementById("closeModal");
 
+/* ========= STATE ========= */
 let scale = 1;
 let focusedIndex = 0;
-let userInteracted = false; // wenn der User zoomt/scrollt, keine Auto-Re-Zentrierung mehr
+let userInteracted = false; // nach erster User-Interaktion keinen Auto-Recenter/Auto-Resize mehr
 const TOTAL = CFG.ROWS * CFG.ROWS;
 
+/* ========= API Helper ========= */
 const api = (p) => fetch(`${CFG.API}${p}`).then(r => {
   if (!r.ok) throw new Error(`API ${p} -> ${r.status}`);
   return r.json();
 });
 
-/** ZENTRIERTE Pyramide: Reihe r hat 1+2r Spalten, Startindex r^2, horizontaler Offset zur Mitte */
+/* ===========================================
+   LAYOUT: ZENTRIERTE PYRAMIDE
+   Reihe r hat 1+2r Spalten, Startindex r^2
+   =========================================== */
 function layoutPyramid() {
   const unit = CFG.TILE + CFG.GAP;
-  const maxCols = 1 + (CFG.ROWS - 1) * 2;           // unterste Reihe
+  const maxCols = 1 + (CFG.ROWS - 1) * 2; // unterste Reihe (breiteste)
   stage.style.width = (maxCols * unit - CFG.GAP) + "px";
 
   let y = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
     const cols = 1 + row * 2;
-    const rowStartIndex = row * row;
-    const xOffset = ((maxCols - cols) / 2) * unit;  // **zentriert**
+    const rowStartIndex = row * row; // Index der ersten Kachel in dieser Reihe
+    const xOffset = ((maxCols - cols) / 2) * unit; // Zentrierung
     let x = xOffset;
 
     for (let c = 0; c < cols; c++) {
       const index = rowStartIndex + c;
+
+      // Tile-Container
       const el = document.createElement("div");
       el.className = "tile";
       el.dataset.index = String(index);
@@ -56,15 +74,19 @@ function layoutPyramid() {
       el.style.left = x + "px";
       el.style.top = y + "px";
       el.style.width = el.style.height = CFG.TILE + "px";
+
+      // Interaktion
       el.addEventListener("click", onTileClick);
       el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") onTileClick({ currentTarget: el }); });
 
+      // Standard: zunächst Thumbnail (PNG)
       const img = document.createElement("img");
       img.alt = `#${index}`;
       img.src = `${CFG.API}/thumb/${index}`;
+      img.onerror = ()=> el.classList.add("failed");
       el.appendChild(img);
 
-      // Pi-Digit Badge (wird via Batch-Meta gefüllt)
+      // Badge für Pi-Digit (wird per Batch-Meta befüllt)
       const badge = document.createElement("div");
       badge.className = "digit";
       badge.textContent = "";
@@ -78,41 +100,49 @@ function layoutPyramid() {
   stage.style.height = (unit * CFG.ROWS - CFG.GAP) + "px";
 }
 
-/** skaliert und triggert ggf. Medienwechsel */
-function setScale(s, {noSwap=false} = {}) {
+/* ===========================================
+   ZOOM & INITIAL VIEW
+   =========================================== */
+function setScale(s, { noSwap = false } = {}) {
   const prev = scale;
   scale = Math.max(0.2, Math.min(6, s));
   stage.style.transform = `scale(${scale})`;
   zoomLevel.textContent = Math.round(scale * 100) + "%";
-  if (!noSwap && ((prev < CFG.SCALE_IMG_THRESHOLD && scale >= CFG.SCALE_IMG_THRESHOLD) ||
-      (prev >= CFG.SCALE_IMG_THRESHOLD && scale < CFG.SCALE_IMG_THRESHOLD))) {
-    swapMediaForScale();
-  }
+
+  // Nur wenn wir die Schwelle kreuzen, Medien für sichtbare tiles austauschen
+  const crossed =
+    (prev < CFG.SCALE_IMG_THRESHOLD && scale >= CFG.SCALE_IMG_THRESHOLD) ||
+    (prev >= CFG.SCALE_IMG_THRESHOLD && scale < CFG.SCALE_IMG_THRESHOLD);
+
+  if (!noSwap && crossed) visibleSwap();
 }
 
 function centerOnApex() {
-  // Horizontal: auf Mitte
+  // Horizontal zentrieren, vertikal zum Apex (oben)
   const midX = Math.max(0, (stage.scrollWidth * scale - stageWrap.clientWidth) / 2);
-  // Vertikal: oben (Apex)
   stageWrap.scrollTo({ left: midX, top: 0, behavior: "auto" });
 }
 
-/** setzt initialen Zoom so, dass die ersten N Reihen exakt in die Höhe passen */
+/** Initialer Zoom: so, dass die ersten N Reihen exakt in die Höhe passen */
 function setInitialView() {
   const unit = CFG.TILE + CFG.GAP;
   const wanted = CFG.INITIAL_ROWS_VISIBLE * unit - CFG.GAP; // echte Pixelhöhe (ohne scale)
-  const h = Math.max(100, stageWrap.clientHeight);          // sichtbarer Bereich
+  const h = Math.max(100, stageWrap.clientHeight);          // tatsächliche Höhe des Sichtfensters
   const targetScale = Math.max(0.2, Math.min(6, h / wanted));
-  setScale(targetScale, {noSwap:true});
-  requestAnimationFrame(()=> {
+
+  setScale(targetScale, { noSwap: true });
+  requestAnimationFrame(() => {
     centerOnApex();
-    // nach dem initialen Center einmal Medien anpassen
-    swapMediaForScale();
+    // Beim ersten Render gleich die Medien für sichtbare Bereiche prüfen
+    visibleSwap();
   });
 }
 
+/* Zoom-Controls */
 zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); };
 zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); };
+
+/* Pinch-to-zoom (Ctrl+Scroll) */
 stageWrap.addEventListener("wheel", (e)=>{
   if (!e.ctrlKey) return;
   e.preventDefault();
@@ -120,21 +150,28 @@ stageWrap.addEventListener("wheel", (e)=>{
   setScale(scale + (e.deltaY < 0 ? .1 : -.1));
 }, { passive: false });
 
+/* Interaktion tracken (kein Auto-Recenter nach User-Aktion) */
 ["scroll","keydown","pointerdown","touchstart"].forEach(evt=>{
-  window.addEventListener(evt, ()=> userInteracted = true, { once:false, passive:true });
+  window.addEventListener(evt, ()=> userInteracted = true, { passive:true });
 });
 
+/* ===========================================
+   MODAL / DETAIL
+   =========================================== */
 closeModal.onclick = () => modal.classList.add("hidden");
 function showModal(html){ modalContent.innerHTML = html; modal.classList.remove("hidden"); }
 function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
 
-/** Batch-Meta: Digit/Achse/Pair einblenden */
+/* ===========================================
+   BATCH-LADER: META + STATUS
+   =========================================== */
 async function loadMetaBatch(from, to) {
   const { data } = await api(`/batch/meta?from=${from}&to=${to}`);
   data.forEach(meta=>{
     const i = meta.index;
     const el = tile(i);
     if (!el) return;
+
     const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
     const by = (k) => attrs.find(a => (a.trait_type||"").toLowerCase() === k);
 
@@ -149,22 +186,40 @@ async function loadMetaBatch(from, to) {
   });
 }
 
-/** Batch-Status: minted/listed/verified setzen */
 async function loadStatusBatch(from, to) {
   const { data } = await api(`/batch/status?from=${from}&to=${to}`);
   data.forEach(s => {
     const el = tile(s.index);
     if (!el) return;
+
+    // Grundstatus & Glows
     if (!s.minted) el.dataset.status = "unminted";
     else if (s.listed) el.dataset.status = "listed";
     else if (s.verified) el.dataset.status = "verified";
+
+    // frisch gekauft -> grün (falls Backend/JSON liefert)
+    if (s.freshBought) el.classList.add("fresh");
+
+    // Marktplatz-Badge im Title + data-attr (für CSS)
+    if (s.market && s.market !== "none") {
+      el.dataset.market = s.market; // "me" | "okx" | "both"
+      const t = el.getAttribute("title") || `#${s.index}`;
+      const marketTxt = s.market === "both" ? "ME + OKX" : (s.market.toUpperCase());
+      el.title = `${t} — listed on ${marketTxt}`;
+    } else {
+      el.dataset.market = "none";
+    }
   });
 }
 
+/* ===========================================
+   TILE-KLICK → MODAL-DETAIL
+   =========================================== */
 async function onTileClick(e) {
   const el = e.currentTarget;
   const idx = parseInt(el.dataset.index);
   focusedIndex = idx;
+
   const meta = await api(`/meta/${idx}`);
   const links = meta.links || {};
   const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
@@ -209,33 +264,64 @@ async function onTileClick(e) {
   `);
 }
 
-/** Video/Thumb Swap abhängig vom Zoom – mit Fail-Schutz */
-function swapMediaForScale() {
-  const useVideo = scale >= CFG.SCALE_IMG_THRESHOLD;
-  for (const el of stage.children) {
-    const idx = parseInt(el.dataset.index);
-    if (el.classList.contains("failed")) continue;
-    const hasVideo = el.querySelector("video");
-    if (useVideo && !hasVideo) {
-      const v = document.createElement("video");
-      v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
-      v.src = `${CFG.API}/video/${idx}`;
-      v.onerror = ()=> el.classList.add("failed");
-      const old = el.firstChild; if (old) el.removeChild(old);
-      el.prepend(v);
-      v.play().catch(()=>{});
-    } else if (!useVideo && hasVideo) {
-      const img = document.createElement("img");
-      img.alt = `#${idx}`;
-      img.src = `${CFG.API}/thumb/${idx}`;
-      img.onerror = ()=> el.classList.add("failed");
-      const old = el.firstChild; if (old) el.removeChild(old);
-      el.prepend(img);
-    }
+/* ===========================================
+   MEDIEN-STEUERUNG
+   - Videos nur im Sichtbereich + ab Zoom-Schwelle
+   - Fallback auf PNG bei Fehlern
+   =========================================== */
+
+/** Tauscht Medientyp für EIN Tile abhängig von Sichtbarkeit + Zoom */
+function toggleTileMedia(el, isVisible) {
+  const idx = parseInt(el.dataset.index);
+  if (el.classList.contains("failed")) return;
+
+  const wantVideo = isVisible && scale >= CFG.SCALE_IMG_THRESHOLD;
+  const hasVideo = !!el.querySelector("video");
+
+  if (wantVideo && !hasVideo) {
+    const v = document.createElement("video");
+    v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
+    v.src = `${CFG.API}/video/${idx}`;
+    v.onerror = ()=> el.classList.add("failed");
+    const old = el.firstChild; if (old) el.removeChild(old);
+    el.prepend(v);
+    v.play().catch(()=>{});
+  } else if (!wantVideo && hasVideo) {
+    const img = document.createElement("img");
+    img.alt = `#${idx}`;
+    img.src = `${CFG.API}/thumb/${idx}`;
+    img.onerror = ()=> el.classList.add("failed");
+    const old = el.firstChild; if (old) el.removeChild(old);
+    el.prepend(img);
   }
 }
 
-/** Vorsichtiges Preload (manuell per Checkbox einschalten) */
+/** Nur sichtbare Tiles prüfen (bei Zoom-Schwelle, Scroll etc.) */
+function visibleSwap() {
+  const wrapRect = stageWrap.getBoundingClientRect();
+  for (const el of stage.children) {
+    const rect = el.getBoundingClientRect();
+    const visible = !(rect.right < wrapRect.left || rect.left > wrapRect.right || rect.bottom < wrapRect.top || rect.top > wrapRect.bottom);
+    toggleTileMedia(el, visible);
+  }
+}
+
+/* IntersectionObserver – steuert Live-Wechsel beim Scrollen */
+const io = new IntersectionObserver((entries)=>{
+  for (const ent of entries) {
+    const el = ent.target;
+    if (!(el instanceof HTMLElement)) continue;
+    toggleTileMedia(el, ent.isIntersecting);
+  }
+}, {
+  root: stageWrap,
+  rootMargin: "256px 0px", // etwas Vorlauf
+  threshold: 0.25          // 25% Sichtbarkeit genügt
+});
+
+/* ===========================================
+   OPTIONAL: volles Preload (manuell via Checkbox)
+   =========================================== */
 async function preloadAllVideos() {
   const conc = CFG.PRELOAD_CONCURRENCY;
   let next = 0;
@@ -261,12 +347,15 @@ async function preloadAllVideos() {
 }
 preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
-/** Lazy-Batches pro sichtbarer Zeile */
+/* ===========================================
+   SCROLL-LADER (Lazy-Batches je sichtbarer Zeile)
+   =========================================== */
 let lastScrollY = 0;
 stageWrap.addEventListener("scroll", ()=> {
   const y = stageWrap.scrollTop / (scale || 1);
   if (Math.abs(y - lastScrollY) < 64) return;
   lastScrollY = y;
+
   const unit = CFG.TILE + CFG.GAP;
   const row = Math.floor(y / unit);
   const windowRows = [row-2, row-1, row, row+1, row+2].filter(r => r>=0 && r<CFG.ROWS);
@@ -276,8 +365,14 @@ stageWrap.addEventListener("scroll", ()=> {
     loadMetaBatch(from, to).catch(()=>{});
     loadStatusBatch(from, to).catch(()=>{});
   });
+
+  // Sichtbare Tiles nachziehen
+  visibleSwap();
 }, { passive:true });
 
+/* ===========================================
+   NAVIGATION (Jump & Keyboard)
+   =========================================== */
 function scrollToIndex(i, open = false) {
   const t = tile(i); if (!t) return;
   stageWrap.scrollTo({ left: t.offsetLeft*scale-100, top: t.offsetTop*scale-100, behavior: "smooth" });
@@ -298,6 +393,9 @@ document.addEventListener("keydown", (e)=>{
   else if (e.key === "ArrowUp") { focusedIndex = Math.max(0, focusedIndex-1); scrollToIndex(focusedIndex); }
 });
 
+/* ===========================================
+   RARITY HEATMAP (optional per Checkbox)
+   =========================================== */
 toggleRarity.addEventListener("change", async ()=>{
   if (!toggleRarity.checked) {
     for (const el of stage.children) { el.style.setProperty("--heat","0"); el.removeAttribute("data-heat"); }
@@ -324,20 +422,30 @@ toggleRarity.addEventListener("change", async ()=>{
   }
 });
 
+/* ===========================================
+   SSE (Heartbeats; MIME wird im Worker korrekt gesetzt)
+   =========================================== */
 function connectEvents() {
-  try { const es = new EventSource(`${CFG.API}/events`);
+  try {
+    const es = new EventSource(`${CFG.API}/events`);
     es.onerror = ()=> { es.close(); setTimeout(connectEvents, 5000); };
   } catch {}
 }
-connectEvents();
 
-// *** Aufbau ***
+/* ===========================================
+   BOOT
+   =========================================== */
+
+// 1) Tiles erzeugen
 layoutPyramid();
 
-// *** Initial: bis Reihe 10 passend zoomen & mittig scrollen ***
+// 2) IntersectionObserver auf alle Tiles legen (Sichtbarkeitssteuerung)
+Array.from(stage.children).forEach(el => io.observe(el));
+
+// 3) Initial so zoomen, dass N Reihen passen, dann Apex zentrieren
 requestAnimationFrame(setInitialView);
 
-// Danach: Daten in Wellen laden
+// 4) Daten in Wellen laden (Meta + Status)
 (async ()=>{
   const windowSize = 300;
   for (let f=0; f<TOTAL; f+=windowSize) {
@@ -348,13 +456,14 @@ requestAnimationFrame(setInitialView);
   }
 })();
 
-// Medien je nach Zoom
-swapMediaForScale();
+// 5) Beim Start Medien gegenprüfen (sichtbare Tiles)
+visibleSwap();
 
-// Kein Autopreload – nur bei Checkbox
-// preloadAllVideos();
+// 6) SSE verbinden
+connectEvents();
 
-// Auf Fenstergröße reagieren (nur solange der User noch nicht interagiert hat)
+// 7) Responsives Verhalten: solange der User NICHT interagiert hat,
+//    wird bei einer Fenstergrößenänderung der Initial-View erneut angewendet.
 window.addEventListener("resize", ()=>{
   if (!userInteracted) setInitialView();
 });
