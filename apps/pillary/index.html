@@ -5,20 +5,7 @@
   <meta http-equiv="x-ua-compatible" content="ie=edge" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Pillary — Pi-Pyramide Galerie</title>
-
-  <meta name="description" content="Pi Pyramide (INPI) — 10,000 Pi Pyramid blocks on Solana. Games × Art. Presale & mint access." />
-  <meta property="og:title" content="Pi Pyramide — INPI" />
-  <meta property="og:description" content="10,000 Pi Pyramid blocks on Solana. Presale access for the upcoming token." />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://inpinity.online/pillary" />
-  <meta name="twitter:card" content="summary_large_image" />
-
-  <!-- Performance -->
-  <link rel="preconnect" href="https://ipfs.inpinity.online" crossorigin>
-  <link rel="dns-prefetch" href="https://ipfs.inpinity.online">
-  <link rel="preconnect" href="https://cloudflare-ipfs.com" crossorigin>
-  <meta http-equiv="delegate-ch" content="sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform">
-
+  <meta name="description" content="Zentrierte Pi-Pyramide: 3 / 1,4,1 / 5,9,2,6,5 … mit Zoom, Live-Status und Video-Tiles." />
   <link rel="stylesheet" href="styles.css" />
   <style>body{background:#0b0f14;color:#dfe7f1;font:14px/1.4 system-ui;margin:0}.boot{padding:12px;color:#9fb6d1}</style>
 </head>
@@ -50,11 +37,6 @@
 
   <main id="stageWrap"><div id="stage" aria-label="NFT-Pi-Pyramide"></div></main>
 
-  <div id="modal" class="hidden">
-    <div id="modalContent" class="modal-body"></div>
-    <button id="closeModal">Schließen</button>
-  </div>
-
   <footer class="foot">
     <div>
       Creator: <code class="mono">GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp</code> ·
@@ -67,7 +49,13 @@
   </footer>
 
   <script type="module">const b=document.querySelector(".boot"); if(b) b.textContent="Pillary initialisiert …";</script>
-  <script type="module" src="app.js" defer></script>
+  <script type="module" src="app.js"></script>
   <noscript>Bitte JavaScript aktivieren.</noscript>
+
+  <!-- Modal wird bei Bedarf dynamisch aufgebaut -->
+  <div id="modal" class="hidden">
+    <div id="modalContent" class="modal-body"></div>
+    <button id="closeModal">Schließen</button>
+  </div>
 </body>
 </html>
