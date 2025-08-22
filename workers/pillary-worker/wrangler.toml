@@ -46,3 +46,5 @@ OKX_TOKEN_URL = "https://web3.okx.com/ul/FOFXecp"
 [[r2_buckets]]
 binding = "R2"
 bucket_name = "pillaries"
+
+workers_dev = true 
