@@ -5,6 +5,15 @@ export interface Env {
   CREATOR: string;
   RPC: string;
   PAGES_HOST: string;
+
+  // NEU – optionale Collection-Infos aus wrangler.toml
+  COLLECTION_NAME?: string;
+  COLLECTION_SYMBOL?: string;
+  COLLECTION_DESCRIPTION?: string;
+  COLLECTION_CHAIN?: string;
+  COLLECTION_STANDARD?: string;
+  ME_COLLECTION_SLUG?: string;
+  COLLECTION_CERT_URL?: string;
 }
 
 const CORS = {
