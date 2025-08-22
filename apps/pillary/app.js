@@ -98,7 +98,13 @@ async function apiGet(p) {
 
 /* ========= UTIL ========= */
 function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
-function videoTier(){ return scale < 0.5 ? "low" : (scale < 1.2 ? "med" : "high"); }
+function videoTier(){
+  const net = navigator.connection?.effectiveType || '';
+  if (/2g|slow-2g/.test(net)) return "low";
+  if (scale < 0.5) return "low";
+  if (scale < 1.2) return "med";
+  return "high";
+}
 function videoUrl(i){ return `${CFG.API}/video/${i}?q=${videoTier()}`; }
 function showModal(html){
   modalContent.innerHTML = html;
