@@ -8,14 +8,12 @@ routes = [
 ]
 
 [vars]
-# <-- WICHTIG: Werte anpassen (oder im Dashboard setzen)
+# Basis-Konfiguration
 PAGES_HOST = "gallary-loader-inpinity.pages.dev"
 JSON_BASE_CID = "bafybeibjqtwncnrsv4vtcnrqcck3bgecu3pfip7mwu4pcdenre5b7am7tu"  # Ordner mit 0.json..9999.json
 IPFS_GATEWAYS = "https://cloudflare-ipfs.com,https://ipfs.io,https://ipfs.inpinity.online"
-COLLECTION_MINT = "6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"
-CREATOR = "GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp"
-RPC = "https://api.mainnet-beta.solana.com"
 
+# Solana / Collection
 COLLECTION_MINT = "6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"
 COLLECTION_NAME = "Pi Pyramide"
 COLLECTION_SYMBOL = "inpi"
@@ -24,3 +22,7 @@ COLLECTION_CHAIN = "solana"
 COLLECTION_STANDARD = "nft"
 ME_COLLECTION_SLUG = "inpi"
 COLLECTION_CERT_URL = "https://solscan.io/token/6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"
+
+# Creator & RPC
+CREATOR = "GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp"
+RPC = "https://api.mainnet-beta.solana.com"
