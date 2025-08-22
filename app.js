@@ -1,26 +1,21 @@
 /* ===========================================
-   Pi Pillary – Gallery App
+   Pi Pillary – zentrale Zahlen-Pyramide (Cheops-Stil)
    =========================================== */
 
 /* ========= CONFIG ========= */
 const CFG = {
-  API: "API: "https://inpinity.online/pillary/api",
+  // Wenn du im Browser über https://inpinity.online/pillary aufrufst,
+  // kannst du auch "/pillary/api" nehmen. Für Tests auf der Pages-URL nimm die absolute:
+  API: "https://inpinity.online/pillary/api",
   ROWS: 100,
   TILE: 32,
-  GAP: 4,                  // auf 0 setzen, wenn Kante-auf-Kante gewünscht
-  PRELOAD_CONCURRENCY: 4,  // manuelles Voll-Preload (Checkbox)
-  RARITY_MIN: 0,
-  RARITY_MAX: 100,
-
-  // Ab welchem Zoom-Faktor auf Video umschalten?
-  // < 0.7: Thumbs (PNG), >= 0.7: Videos (nur wenn sichtbar)
-  SCALE_IMG_THRESHOLD: 0.7,
-
-  // Wie viele Reihen sollen initial vertikal genau ins Viewport-Fenster passen?
-  INITIAL_ROWS_VISIBLE: 10
+  GAP: 4,                     // 0 = Kante-auf-Kante
+  PRELOAD_CONCURRENCY: 4,     // optionales Voll-Preload (Checkbox)
+  SCALE_IMG_THRESHOLD: 0.7,   // ab diesem Zoom Videos (wenn sichtbar)
+  INITIAL_ROWS_VISIBLE: 10     // erste N Reihen sollen anfänglich genau in die Höhe passen
 };
 
-/* ========= DOM HOOKS ========= */
+/* ========= DOM ========= */
 const stage = document.getElementById("stage");
 const stageWrap = document.getElementById("stageWrap");
 const zoomInBtn = document.getElementById("zoomIn");
@@ -37,7 +32,7 @@ const closeModal = document.getElementById("closeModal");
 /* ========= STATE ========= */
 let scale = 1;
 let focusedIndex = 0;
-let userInteracted = false; // nach erster User-Interaktion keinen Auto-Recenter/Auto-Resize mehr
+let userInteracted = false;
 const TOTAL = CFG.ROWS * CFG.ROWS;
 
 /* ========= API Helper ========= */
@@ -46,26 +41,34 @@ const api = (p) => fetch(`${CFG.API}${p}`).then(r => {
   return r.json();
 });
 
+/* ========= Utils ========= */
+function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
+
 /* ===========================================
-   LAYOUT: ZENTRIERTE PYRAMIDE
-   Reihe r hat 1+2r Spalten, Startindex r^2
+   LAYOUT: zentrale Zahlen-Pyramide
+   Reihe r hat 2r+1 Blöcke; Startindex = r²
+   → #0 oben alleine; darunter 1..3; darunter 4..8; etc.
    =========================================== */
 function layoutPyramid() {
   const unit = CFG.TILE + CFG.GAP;
-  const maxCols = 1 + (CFG.ROWS - 1) * 2; // unterste Reihe (breiteste)
+
+  // breiteste Reihe (unten) hat 2*(ROWS-1)+1 Spalten
+  const maxCols = 2*(CFG.ROWS - 1) + 1;
   stage.style.width = (maxCols * unit - CFG.GAP) + "px";
 
   let y = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
-    const cols = 1 + row * 2;
-    const rowStartIndex = row * row; // Index der ersten Kachel in dieser Reihe
-    const xOffset = ((maxCols - cols) / 2) * unit; // Zentrierung
+    const cols = 2*row + 1;          // 1,3,5,7,...
+    const rowStartIndex = row*row;   // 0,1,4,9,16,...
+    const mid = Math.floor(cols/2);  // mittlerer Block dieser Reihe
+
+    // so ausrichten, dass der mittlere Block unter der zentralen Achse liegt
+    const xOffset = ((maxCols / 2) - mid) * unit;
     let x = xOffset;
 
     for (let c = 0; c < cols; c++) {
       const index = rowStartIndex + c;
 
-      // Tile-Container
       const el = document.createElement("div");
       el.className = "tile";
       el.dataset.index = String(index);
@@ -75,18 +78,17 @@ function layoutPyramid() {
       el.style.top = y + "px";
       el.style.width = el.style.height = CFG.TILE + "px";
 
-      // Interaktion
       el.addEventListener("click", onTileClick);
       el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") onTileClick({ currentTarget: el }); });
 
-      // Standard: zunächst Thumbnail (PNG)
+      // Standard: zunächst Thumbnail
       const img = document.createElement("img");
       img.alt = `#${index}`;
       img.src = `${CFG.API}/thumb/${index}`;
       img.onerror = ()=> el.classList.add("failed");
       el.appendChild(img);
 
-      // Badge für Pi-Digit (wird per Batch-Meta befüllt)
+      // Badge für Ziffer (wird via Meta befüllt)
       const badge = document.createElement("div");
       badge.className = "digit";
       badge.textContent = "";
@@ -101,7 +103,7 @@ function layoutPyramid() {
 }
 
 /* ===========================================
-   ZOOM & INITIAL VIEW
+   ZOOM & INITIAL VIEW (erste N Reihen passend)
    =========================================== */
 function setScale(s, { noSwap = false } = {}) {
   const prev = scale;
@@ -109,7 +111,6 @@ function setScale(s, { noSwap = false } = {}) {
   stage.style.transform = `scale(${scale})`;
   zoomLevel.textContent = Math.round(scale * 100) + "%";
 
-  // Nur wenn wir die Schwelle kreuzen, Medien für sichtbare tiles austauschen
   const crossed =
     (prev < CFG.SCALE_IMG_THRESHOLD && scale >= CFG.SCALE_IMG_THRESHOLD) ||
     (prev >= CFG.SCALE_IMG_THRESHOLD && scale < CFG.SCALE_IMG_THRESHOLD);
@@ -118,23 +119,23 @@ function setScale(s, { noSwap = false } = {}) {
 }
 
 function centerOnApex() {
-  // Horizontal zentrieren, vertikal zum Apex (oben)
+  // horizontal zentriert, vertikal oben (Apex = #0)
   const midX = Math.max(0, (stage.scrollWidth * scale - stageWrap.clientWidth) / 2);
   stageWrap.scrollTo({ left: midX, top: 0, behavior: "auto" });
 }
 
-/** Initialer Zoom: so, dass die ersten N Reihen exakt in die Höhe passen */
+/** Erst-View: zoomt so, dass die ersten N Reihen exakt in die Höhe passen */
 function setInitialView() {
   const unit = CFG.TILE + CFG.GAP;
-  const wanted = CFG.INITIAL_ROWS_VISIBLE * unit - CFG.GAP; // echte Pixelhöhe (ohne scale)
-  const h = Math.max(100, stageWrap.clientHeight);          // tatsächliche Höhe des Sichtfensters
+  const wanted = CFG.INITIAL_ROWS_VISIBLE * unit - CFG.GAP;
+  const h = Math.max(100, stageWrap.clientHeight);
   const targetScale = Math.max(0.2, Math.min(6, h / wanted));
 
   setScale(targetScale, { noSwap: true });
   requestAnimationFrame(() => {
     centerOnApex();
-    // Beim ersten Render gleich die Medien für sichtbare Bereiche prüfen
-    visibleSwap();
+    visibleSwap();                 // sichtbare Tiles einmal prüfen
+    forceVideoForTopRows(CFG.INITIAL_ROWS_VISIBLE); // erste N Reihen direkt Video
   });
 }
 
@@ -142,7 +143,7 @@ function setInitialView() {
 zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); };
 zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); };
 
-/* Pinch-to-zoom (Ctrl+Scroll) */
+/* Pinch/Ctrl+Scroll */
 stageWrap.addEventListener("wheel", (e)=>{
   if (!e.ctrlKey) return;
   e.preventDefault();
@@ -150,20 +151,12 @@ stageWrap.addEventListener("wheel", (e)=>{
   setScale(scale + (e.deltaY < 0 ? .1 : -.1));
 }, { passive: false });
 
-/* Interaktion tracken (kein Auto-Recenter nach User-Aktion) */
 ["scroll","keydown","pointerdown","touchstart"].forEach(evt=>{
   window.addEventListener(evt, ()=> userInteracted = true, { passive:true });
 });
 
 /* ===========================================
-   MODAL / DETAIL
-   =========================================== */
-closeModal.onclick = () => modal.classList.add("hidden");
-function showModal(html){ modalContent.innerHTML = html; modal.classList.remove("hidden"); }
-function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
-
-/* ===========================================
-   BATCH-LADER: META + STATUS
+   META + STATUS (Batch)
    =========================================== */
 async function loadMetaBatch(from, to) {
   const { data } = await api(`/batch/meta?from=${from}&to=${to}`);
@@ -191,16 +184,12 @@ async function loadStatusBatch(from, to) {
   data.forEach(s => {
     const el = tile(s.index);
     if (!el) return;
-
-    // Grundstatus & Glows
     if (!s.minted) el.dataset.status = "unminted";
     else if (s.listed) el.dataset.status = "listed";
     else if (s.verified) el.dataset.status = "verified";
-
-    // frisch gekauft -> grün (falls Backend/JSON liefert)
     if (s.freshBought) el.classList.add("fresh");
 
-    // Marktplatz-Badge im Title + data-attr (für CSS)
+    // Market-Badge optional
     if (s.market && s.market !== "none") {
       el.dataset.market = s.market; // "me" | "okx" | "both"
       const t = el.getAttribute("title") || `#${s.index}`;
@@ -213,7 +202,7 @@ async function loadStatusBatch(from, to) {
 }
 
 /* ===========================================
-   TILE-KLICK → MODAL-DETAIL
+   DETAIL-MODAL
    =========================================== */
 async function onTileClick(e) {
   const el = e.currentTarget;
@@ -265,12 +254,8 @@ async function onTileClick(e) {
 }
 
 /* ===========================================
-   MEDIEN-STEUERUNG
-   - Videos nur im Sichtbereich + ab Zoom-Schwelle
-   - Fallback auf PNG bei Fehlern
+   MEDIEN-STEUERUNG (Video nur im Sichtbereich / ab Zoom)
    =========================================== */
-
-/** Tauscht Medientyp für EIN Tile abhängig von Sichtbarkeit + Zoom */
 function toggleTileMedia(el, isVisible) {
   const idx = parseInt(el.dataset.index);
   if (el.classList.contains("failed")) return;
@@ -296,7 +281,6 @@ function toggleTileMedia(el, isVisible) {
   }
 }
 
-/** Nur sichtbare Tiles prüfen (bei Zoom-Schwelle, Scroll etc.) */
 function visibleSwap() {
   const wrapRect = stageWrap.getBoundingClientRect();
   for (const el of stage.children) {
@@ -306,7 +290,21 @@ function visibleSwap() {
   }
 }
 
-/* IntersectionObserver – steuert Live-Wechsel beim Scrollen */
+function forceVideoForTopRows(N) {
+  // treat as visible, damit Top-Reihen sofort als Video kommen
+  const unit = CFG.TILE + CFG.GAP;
+  for (let row = 0; row < Math.min(N, CFG.ROWS); row++) {
+    const cols = 2*row + 1;
+    const start = row*row;
+    const end = start + cols - 1;
+    for (let i = start; i <= end; i++) {
+      const el = tile(i);
+      if (el) toggleTileMedia(el, true);
+    }
+  }
+}
+
+// IntersectionObserver für Live-Umschalten
 const io = new IntersectionObserver((entries)=>{
   for (const ent of entries) {
     const el = ent.target;
@@ -315,12 +313,12 @@ const io = new IntersectionObserver((entries)=>{
   }
 }, {
   root: stageWrap,
-  rootMargin: "256px 0px", // etwas Vorlauf
-  threshold: 0.25          // 25% Sichtbarkeit genügt
+  rootMargin: "256px 0px",
+  threshold: 0.25
 });
 
 /* ===========================================
-   OPTIONAL: volles Preload (manuell via Checkbox)
+   OPTIONAL: Preload-Checkbox
    =========================================== */
 async function preloadAllVideos() {
   const conc = CFG.PRELOAD_CONCURRENCY;
@@ -348,7 +346,7 @@ async function preloadAllVideos() {
 preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
 /* ===========================================
-   SCROLL-LADER (Lazy-Batches je sichtbarer Zeile)
+   SCROLL: Lazy-Batches je sichtbarer Zeile
    =========================================== */
 let lastScrollY = 0;
 stageWrap.addEventListener("scroll", ()=> {
@@ -361,17 +359,16 @@ stageWrap.addEventListener("scroll", ()=> {
   const windowRows = [row-2, row-1, row, row+1, row+2].filter(r => r>=0 && r<CFG.ROWS);
   windowRows.forEach(r=>{
     const from = r*r;
-    const to = from + (1 + r*2) - 1;
+    const to   = from + (2*r + 1) - 1; // start + cols - 1
     loadMetaBatch(from, to).catch(()=>{});
     loadStatusBatch(from, to).catch(()=>{});
   });
 
-  // Sichtbare Tiles nachziehen
   visibleSwap();
 }, { passive:true });
 
 /* ===========================================
-   NAVIGATION (Jump & Keyboard)
+   NAVIGATION
    =========================================== */
 function scrollToIndex(i, open = false) {
   const t = tile(i); if (!t) return;
@@ -394,36 +391,7 @@ document.addEventListener("keydown", (e)=>{
 });
 
 /* ===========================================
-   RARITY HEATMAP (optional per Checkbox)
-   =========================================== */
-toggleRarity.addEventListener("change", async ()=>{
-  if (!toggleRarity.checked) {
-    for (const el of stage.children) { el.style.setProperty("--heat","0"); el.removeAttribute("data-heat"); }
-    return;
-  }
-  const windowSize = 200;
-  for (let f=0; f<TOTAL; f+=windowSize) {
-    const t = Math.min(TOTAL-1, f+windowSize-1);
-    const { data } = await api(`/batch/meta?from=${f}&to=${t}`);
-    data.forEach(meta=>{
-      const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
-      const score =
-        meta.rarity_score ??
-        (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarity_score")?.value) ??
-        (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarityscore")?.value);
-      if (score != null) {
-        const el = tile(meta.index); if (!el) return;
-        const s = Number(score);
-        const norm = Math.max(0, Math.min(1, (s - CFG.RARITY_MIN) / (CFG.RARITY_MAX - CFG.RARITY_MIN)));
-        el.style.setProperty("--heat", String(norm * 0.65));
-        el.setAttribute("data-heat","1");
-      }
-    });
-  }
-});
-
-/* ===========================================
-   SSE (Heartbeats; MIME wird im Worker korrekt gesetzt)
+   SSE Heartbeats
    =========================================== */
 function connectEvents() {
   try {
@@ -435,35 +403,20 @@ function connectEvents() {
 /* ===========================================
    BOOT
    =========================================== */
+(function boot(){
+  layoutPyramid();
+  Array.from(stage.children).forEach(el => io.observe(el)); // Sichtbarkeit beobachten
+  requestAnimationFrame(setInitialView);
+  connectEvents();
 
-// 1) Tiles erzeugen
-layoutPyramid();
-
-// 2) IntersectionObserver auf alle Tiles legen (Sichtbarkeitssteuerung)
-Array.from(stage.children).forEach(el => io.observe(el));
-
-// 3) Initial so zoomen, dass N Reihen passen, dann Apex zentrieren
-requestAnimationFrame(setInitialView);
-
-// 4) Daten in Wellen laden (Meta + Status)
-(async ()=>{
-  const windowSize = 300;
-  for (let f=0; f<TOTAL; f+=windowSize) {
-    const t = Math.min(TOTAL-1, f+windowSize-1);
-    loadMetaBatch(f, t).catch(()=>{});
-    loadStatusBatch(f, t).catch(()=>{});
-    await new Promise(r=>setTimeout(r, 40));
-  }
+  // Meta & Status in Wellen (bremst Browser nicht aus)
+  (async ()=>{
+    const windowSize = 300;
+    for (let f=0; f<TOTAL; f+=windowSize) {
+      const t = Math.min(TOTAL-1, f+windowSize-1);
+      loadMetaBatch(f, t).catch(()=>{});
+      loadStatusBatch(f, t).catch(()=>{});
+      await new Promise(r=>setTimeout(r, 40));
+    }
+  })();
 })();
-
-// 5) Beim Start Medien gegenprüfen (sichtbare Tiles)
-visibleSwap();
-
-// 6) SSE verbinden
-connectEvents();
-
-// 7) Responsives Verhalten: solange der User NICHT interagiert hat,
-//    wird bei einer Fenstergrößenänderung der Initial-View erneut angewendet.
-window.addEventListener("resize", ()=>{
-  if (!userInteracted) setInitialView();
-});
