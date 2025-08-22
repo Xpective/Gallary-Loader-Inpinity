@@ -4,30 +4,57 @@
 
 /* ========= CONFIG ========= */
 const CFG = {
-  // Wenn du im Browser über https://inpinity.online/pillary aufrufst,
-  // kannst du auch "/pillary/api" nehmen. Für Tests auf der Pages-URL nimm die absolute:
   API: "https://inpinity.online/pillary/api",
   ROWS: 100,
   TILE: 32,
-  GAP: 4,                     // 0 = Kante-auf-Kante
-  PRELOAD_CONCURRENCY: 4,     // optionales Voll-Preload (Checkbox)
+  GAP: 4,
+  PRELOAD_CONCURRENCY: 4,
   SCALE_IMG_THRESHOLD: 0.7,   // ab diesem Zoom Videos (wenn sichtbar)
-  INITIAL_ROWS_VISIBLE: 10     // erste N Reihen sollen anfänglich genau in die Höhe passen
+  INITIAL_ROWS_VISIBLE: 10
 };
 
+/* ========= DOM Helper (null-sicher) ========= */
+function reqEl(id) {
+  let el = document.getElementById(id);
+  if (!el) {
+    // Minimal-Modal zur Not dynamisch nachrüsten
+    if (id === "modal") {
+      const m = document.createElement("div");
+      m.id = "modal"; m.className = "hidden";
+      m.innerHTML = `<div id="modalContent" class="modal-body"></div><button id="closeModal">Schließen</button>`;
+      document.body.appendChild(m);
+      el = m;
+    } else if (id === "modalContent") {
+      const mc = document.createElement("div");
+      mc.id = "modalContent"; mc.className = "modal-body";
+      reqEl("modal").appendChild(mc);
+      el = mc;
+    } else if (id === "closeModal") {
+      const b = document.createElement("button");
+      b.id = "closeModal"; b.textContent = "Schließen";
+      reqEl("modal").appendChild(b);
+      el = b;
+    } else {
+      console.error(`[Pillary] Element #${id} nicht gefunden. Prüfe /pillary/index.html IDs.`);
+      throw new Error(`Element #${id} not found`);
+    }
+  }
+  return el;
+}
+
 /* ========= DOM ========= */
-const stage = document.getElementById("stage");
-const stageWrap = document.getElementById("stageWrap");
-const zoomInBtn = document.getElementById("zoomIn");
-const zoomOutBtn = document.getElementById("zoomOut");
-const zoomLevel = document.getElementById("zoomLevel");
-const preloadAllChk = document.getElementById("preloadAll");
-const toggleRarity = document.getElementById("toggleRarity");
-const jumpTo = document.getElementById("jumpTo");
-const jumpBtn = document.getElementById("jumpBtn");
-const modal = document.getElementById("modal");
-const modalContent = document.getElementById("modalContent");
-const closeModal = document.getElementById("closeModal");
+const stage = reqEl("stage");
+const stageWrap = reqEl("stageWrap");
+const zoomInBtn = reqEl("zoomIn");
+const zoomOutBtn = reqEl("zoomOut");
+const zoomLevel = reqEl("zoomLevel");
+const preloadAllChk = reqEl("preloadAll");
+const toggleRarity = reqEl("toggleRarity");
+const jumpTo = reqEl("jumpTo");
+const jumpBtn = reqEl("jumpBtn");
+const modal = reqEl("modal");
+const modalContent = reqEl("modalContent");
+const closeModalBtn = reqEl("closeModal");
 
 /* ========= STATE ========= */
 let scale = 1;
@@ -36,34 +63,39 @@ let userInteracted = false;
 const TOTAL = CFG.ROWS * CFG.ROWS;
 
 /* ========= API Helper ========= */
-const api = (p) => fetch(`${CFG.API}${p}`).then(r => {
+async function apiGet(p) {
+  const r = await fetch(`${CFG.API}${p}`);
   if (!r.ok) throw new Error(`API ${p} -> ${r.status}`);
   return r.json();
-});
+}
 
 /* ========= Utils ========= */
 function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
+function showModal(html){
+  modalContent.innerHTML = html;
+  modal.classList.remove("hidden");
+  const x = document.getElementById("closeModal");
+  if (x) x.onclick = () => modal.classList.add("hidden");
+}
+closeModalBtn.onclick = () => modal.classList.add("hidden");
 
 /* ===========================================
    LAYOUT: zentrale Zahlen-Pyramide
    Reihe r hat 2r+1 Blöcke; Startindex = r²
-   → #0 oben alleine; darunter 1..3; darunter 4..8; etc.
    =========================================== */
 function layoutPyramid() {
   const unit = CFG.TILE + CFG.GAP;
 
-  // breiteste Reihe (unten) hat 2*(ROWS-1)+1 Spalten
-  const maxCols = 2*(CFG.ROWS - 1) + 1;
+  const maxCols = 2*(CFG.ROWS - 1) + 1; // breiteste Reihe
   stage.style.width = (maxCols * unit - CFG.GAP) + "px";
 
   let y = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
     const cols = 2*row + 1;          // 1,3,5,7,...
     const rowStartIndex = row*row;   // 0,1,4,9,16,...
-    const mid = Math.floor(cols/2);  // mittlerer Block dieser Reihe
+    const mid = Math.floor(cols/2);  // mittlerer Block
 
-    // so ausrichten, dass der mittlere Block unter der zentralen Achse liegt
-    const xOffset = ((maxCols / 2) - mid) * unit;
+    const xOffset = ((maxCols / 2) - mid) * unit; // mittig unter der Achse
     let x = xOffset;
 
     for (let c = 0; c < cols; c++) {
@@ -81,20 +113,22 @@ function layoutPyramid() {
       el.addEventListener("click", onTileClick);
       el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") onTileClick({ currentTarget: el }); });
 
-      // Standard: zunächst Thumbnail
+      // Start: Thumbnail (niemals schwarz)
       const img = document.createElement("img");
       img.alt = `#${index}`;
       img.src = `${CFG.API}/thumb/${index}`;
+      img.decoding = "async";
+      img.loading = "lazy";
       img.onerror = ()=> el.classList.add("failed");
       el.appendChild(img);
 
-      // Badge für Ziffer (wird via Meta befüllt)
       const badge = document.createElement("div");
       badge.className = "digit";
       badge.textContent = "";
       el.appendChild(badge);
 
       stage.appendChild(el);
+      io.observe(el); // Sichtbarkeits-Beobachtung
       x += unit;
     }
     y += unit;
@@ -103,7 +137,90 @@ function layoutPyramid() {
 }
 
 /* ===========================================
-   ZOOM & INITIAL VIEW (erste N Reihen passend)
+   MEDIEN-STEUERUNG (Video nur in Sicht / ab Zoom)
+   =========================================== */
+function makeVideo(idx, posterUrl) {
+  const v = document.createElement("video");
+  v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
+  v.preload = "metadata";
+  if (posterUrl) v.poster = posterUrl; // verhindert „schwarz“
+  v.src = `${CFG.API}/video/${idx}`;
+  return v;
+}
+
+function toggleTileMedia(el, isVisible) {
+  const idx = parseInt(el.dataset.index);
+  if (el.classList.contains("failed")) return;
+
+  const wantVideo = isVisible && scale >= CFG.SCALE_IMG_THRESHOLD;
+  const hasVideo = !!el.querySelector("video");
+
+  if (wantVideo && !hasVideo) {
+    const poster = `${CFG.API}/thumb/${idx}`;
+    const v = makeVideo(idx, poster);
+    v.onerror = ()=> el.classList.add("failed");
+    const old = el.firstChild; if (old) el.removeChild(old);
+    el.prepend(v);
+    v.play().catch(()=>{}); // Autoplay-Safety
+  } else if (!wantVideo && hasVideo) {
+    const img = document.createElement("img");
+    img.alt = `#${idx}`;
+    img.src = `${CFG.API}/thumb/${idx}`;
+    img.decoding = "async";
+    img.loading = "lazy";
+    img.onerror = ()=> el.classList.add("failed");
+    const old = el.firstChild; if (old) el.removeChild(old);
+    el.prepend(img);
+  }
+}
+
+/* Sichtbarkeits-Observer:
+   – setzt .inview-Klasse (für Dimmen außerhalb)
+   – triggert Medienwechsel
+*/
+const io = new IntersectionObserver((entries)=>{
+  for (const ent of entries) {
+    const el = ent.target;
+    if (!(el instanceof HTMLElement)) continue;
+    if (ent.isIntersecting) el.classList.add("inview");
+    else el.classList.remove("inview");
+    toggleTileMedia(el, ent.isIntersecting);
+  }
+}, {
+  root: stageWrap,
+  rootMargin: "256px 0px",
+  threshold: 0.25
+});
+
+function visibleSwap() {
+  // ergänzend für Zoom: markiere sichtbar/unsichtbar (grobe Box-Check)
+  const wrapRect = stageWrap.getBoundingClientRect();
+  for (const el of stage.children) {
+    const rect = el.getBoundingClientRect();
+    const visible = !(rect.right < wrapRect.left || rect.left > wrapRect.right || rect.bottom < wrapRect.top || rect.top > wrapRect.bottom);
+    el.classList.toggle("inview", visible);
+    toggleTileMedia(el, visible);
+  }
+}
+
+function forceVideoForTopRows(N) {
+  // Top-N-Reihen sofort als "sichtbar" behandeln (Glow & Video)
+  for (let row = 0; row < Math.min(N, CFG.ROWS); row++) {
+    const cols = 2*row + 1;
+    const start = row*row;
+    const end = start + cols - 1;
+    for (let i = start; i <= end; i++) {
+      const el = tile(i);
+      if (el) {
+        el.classList.add("inview");
+        toggleTileMedia(el, true);
+      }
+    }
+  }
+}
+
+/* ===========================================
+   ZOOM & INITIAL VIEW
    =========================================== */
 function setScale(s, { noSwap = false } = {}) {
   const prev = scale;
@@ -119,12 +236,10 @@ function setScale(s, { noSwap = false } = {}) {
 }
 
 function centerOnApex() {
-  // horizontal zentriert, vertikal oben (Apex = #0)
   const midX = Math.max(0, (stage.scrollWidth * scale - stageWrap.clientWidth) / 2);
   stageWrap.scrollTo({ left: midX, top: 0, behavior: "auto" });
 }
 
-/** Erst-View: zoomt so, dass die ersten N Reihen exakt in die Höhe passen */
 function setInitialView() {
   const unit = CFG.TILE + CFG.GAP;
   const wanted = CFG.INITIAL_ROWS_VISIBLE * unit - CFG.GAP;
@@ -134,14 +249,14 @@ function setInitialView() {
   setScale(targetScale, { noSwap: true });
   requestAnimationFrame(() => {
     centerOnApex();
-    visibleSwap();                 // sichtbare Tiles einmal prüfen
-    forceVideoForTopRows(CFG.INITIAL_ROWS_VISIBLE); // erste N Reihen direkt Video
+    visibleSwap();                          // sichtbare Tiles erkennen
+    forceVideoForTopRows(CFG.INITIAL_ROWS_VISIBLE); // Top-N direkt Video
   });
 }
 
 /* Zoom-Controls */
-zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); };
-zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); };
+zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); visibleSwap(); };
+zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); visibleSwap(); };
 
 /* Pinch/Ctrl+Scroll */
 stageWrap.addEventListener("wheel", (e)=>{
@@ -149,6 +264,7 @@ stageWrap.addEventListener("wheel", (e)=>{
   e.preventDefault();
   userInteracted = true;
   setScale(scale + (e.deltaY < 0 ? .1 : -.1));
+  visibleSwap();
 }, { passive: false });
 
 ["scroll","keydown","pointerdown","touchstart"].forEach(evt=>{
@@ -156,11 +272,12 @@ stageWrap.addEventListener("wheel", (e)=>{
 });
 
 /* ===========================================
-   META + STATUS (Batch)
+   META + STATUS (Batch) + RARITY-Glow
    =========================================== */
 async function loadMetaBatch(from, to) {
-  const { data } = await api(`/batch/meta?from=${from}&to=${to}`);
+  const { data } = await apiGet(`/batch/meta?from=${from}&to=${to}`);
   data.forEach(meta=>{
+    if (!meta || meta.error) return;  // Problem-Indizes skippen
     const i = meta.index;
     const el = tile(i);
     if (!el) return;
@@ -176,20 +293,29 @@ async function loadMetaBatch(from, to) {
     if (badge && digit != null) badge.textContent = String(digit);
     if (axis === true || axis === "true") el.classList.add("axis");
     if (pair === true || pair === "true") el.classList.add("pair");
+
+    // Rarity-Heat (0..100 → 0..1)
+    const score =
+      meta.rarity_score ??
+      (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarity_score")?.value) ??
+      (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarityscore")?.value);
+    if (score != null) {
+      const s = Number(score);
+      const norm = Math.max(0, Math.min(1, (s - 0) / (100 - 0)));
+      el.style.setProperty("--heat", String(norm * 0.65));
+      el.setAttribute("data-heat","1");
+    }
   });
 }
 
 async function loadStatusBatch(from, to) {
-  const { data } = await api(`/batch/status?from=${from}&to=${to}`);
+  const { data } = await apiGet(`/batch/status?from=${from}&to=${to}`);
   data.forEach(s => {
     const el = tile(s.index);
     if (!el) return;
     if (!s.minted) el.dataset.status = "unminted";
     else if (s.listed) el.dataset.status = "listed";
     else if (s.verified) el.dataset.status = "verified";
-    if (s.freshBought) el.classList.add("fresh");
-
-    // Market-Badge optional
     if (s.market && s.market !== "none") {
       el.dataset.market = s.market; // "me" | "okx" | "both"
       const t = el.getAttribute("title") || `#${s.index}`;
@@ -205,117 +331,56 @@ async function loadStatusBatch(from, to) {
    DETAIL-MODAL
    =========================================== */
 async function onTileClick(e) {
-  const el = e.currentTarget;
-  const idx = parseInt(el.dataset.index);
-  focusedIndex = idx;
+  try {
+    const el = e.currentTarget;
+    const idx = parseInt(el.dataset.index);
+    focusedIndex = idx;
 
-  const meta = await api(`/meta/${idx}`);
-  const links = meta.links || {};
-  const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
+    const meta = await apiGet(`/meta/${idx}`);
+    const links = meta.links || {};
+    const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
 
-  const rarityScore =
-    meta.rarity_score ??
-    (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarity_score")?.value) ??
-    (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarityscore")?.value);
+    const rarityScore =
+      meta.rarity_score ??
+      (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarity_score")?.value) ??
+      (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarityscore")?.value);
 
-  const digit = (attrs.find(a => (a.trait_type||"").toLowerCase() === "digit")?.value);
-  const axis  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "axis")?.value);
-  const pair  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "matchingpair")?.value);
+    const digit = (attrs.find(a => (a.trait_type||"").toLowerCase() === "digit")?.value);
+    const axis  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "axis")?.value);
+    const pair  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "matchingpair")?.value);
 
-  const rows = [
-    ["Index", `#${idx}`],
-    ["Name", meta.name || ""],
-    ["Mint", meta.mint || ""],
-    ["Symbol", meta.symbol || ""],
-    ["Digit (π)", digit ?? ""],
-    ["Axis", axis ?? ""],
-    ["Matching Pair", pair ?? ""],
-    ["Animation", meta.animation_url || meta.properties?.animation_url || ""],
-    ["Rarity Score", rarityScore ?? ""],
-  ].map(([k,v])=> `<div class="meta-row"><b>${k}</b><div>${(v||"").toString()}</div></div>`).join("");
+    const rows = [
+      ["Index", `#${idx}`],
+      ["Name", meta.name || ""],
+      ["Mint", meta.mint || ""],
+      ["Symbol", meta.symbol || ""],
+      ["Digit (π)", digit ?? ""],
+      ["Axis", axis ?? ""],
+      ["Matching Pair", pair ?? ""],
+      ["Animation", meta.animation_url || meta.properties?.animation_url || ""],
+      ["Rarity Score", rarityScore ?? ""],
+    ].map(([k,v])=> `<div class="meta-row"><b>${k}</b><div>${(v||"").toString()}</div></div>`).join("");
 
-  const attrHtml = attrs.length
-    ? `<div class="meta-row"><b>Attributes</b><div>${attrs.map(a=>`${a.trait_type??""}: ${a.value??""}`).join(" • ")}</div></div>`
-    : "";
+    const linkHtml = `
+      <div class="links">
+        ${meta.mint ? `<a target="_blank" href="${links.magicEdenItem}">Kaufen @ Magic Eden</a>` : ""}
+        ${meta.mint ? `<a target="_blank" href="${links.okxNftItem}">Kaufen @ OKX</a>` : ""}
+        <a target="_blank" href="https://magiceden.io/marketplace/inpi">Collection</a>
+        <a target="_blank" href="https://solscan.io/account/GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp">Creator</a>
+      </div>`;
 
-  const linkHtml = `
-    <div class="links">
-      ${meta.mint ? `<a target="_blank" href="${links.magicEdenItem}">Kaufen @ Magic Eden</a>` : ""}
-      ${meta.mint ? `<a target="_blank" href="${links.okxNftItem}">Kaufen @ OKX</a>` : ""}
-      <a target="_blank" href="https://magiceden.io/marketplace/InPi">Collection</a>
-      <a target="_blank" href="https://solscan.io/account/GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp">Creator</a>
-    </div>`;
-
-  showModal(`
-    <h3>${meta.name ?? "Item"} — #${idx}</h3>
-    ${rows}${attrHtml}${linkHtml}
-    <video src="${CFG.API}/video/${idx}" controls muted playsinline loop style="width:100%;margin-top:8px;border-radius:8px"></video>
-  `);
-}
-
-/* ===========================================
-   MEDIEN-STEUERUNG (Video nur im Sichtbereich / ab Zoom)
-   =========================================== */
-function toggleTileMedia(el, isVisible) {
-  const idx = parseInt(el.dataset.index);
-  if (el.classList.contains("failed")) return;
-
-  const wantVideo = isVisible && scale >= CFG.SCALE_IMG_THRESHOLD;
-  const hasVideo = !!el.querySelector("video");
-
-  if (wantVideo && !hasVideo) {
-    const v = document.createElement("video");
-    v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
-    v.src = `${CFG.API}/video/${idx}`;
-    v.onerror = ()=> el.classList.add("failed");
-    const old = el.firstChild; if (old) el.removeChild(old);
-    el.prepend(v);
-    v.play().catch(()=>{});
-  } else if (!wantVideo && hasVideo) {
-    const img = document.createElement("img");
-    img.alt = `#${idx}`;
-    img.src = `${CFG.API}/thumb/${idx}`;
-    img.onerror = ()=> el.classList.add("failed");
-    const old = el.firstChild; if (old) el.removeChild(old);
-    el.prepend(img);
+    showModal(`
+      <h3>${meta.name ?? "Item"} — #${idx}</h3>
+      ${rows}${linkHtml}
+      <video src="${CFG.API}/video/${idx}" controls muted playsinline loop
+             preload="metadata" poster="${CFG.API}/thumb/${idx}"
+             style="width:100%;margin-top:8px;border-radius:8px"></video>
+    `);
+  } catch (err) {
+    console.error("Modal-Fehler:", err);
+    alert("Konnte Details nicht laden. Bitte später erneut versuchen.");
   }
 }
-
-function visibleSwap() {
-  const wrapRect = stageWrap.getBoundingClientRect();
-  for (const el of stage.children) {
-    const rect = el.getBoundingClientRect();
-    const visible = !(rect.right < wrapRect.left || rect.left > wrapRect.right || rect.bottom < wrapRect.top || rect.top > wrapRect.bottom);
-    toggleTileMedia(el, visible);
-  }
-}
-
-function forceVideoForTopRows(N) {
-  // treat as visible, damit Top-Reihen sofort als Video kommen
-  const unit = CFG.TILE + CFG.GAP;
-  for (let row = 0; row < Math.min(N, CFG.ROWS); row++) {
-    const cols = 2*row + 1;
-    const start = row*row;
-    const end = start + cols - 1;
-    for (let i = start; i <= end; i++) {
-      const el = tile(i);
-      if (el) toggleTileMedia(el, true);
-    }
-  }
-}
-
-// IntersectionObserver für Live-Umschalten
-const io = new IntersectionObserver((entries)=>{
-  for (const ent of entries) {
-    const el = ent.target;
-    if (!(el instanceof HTMLElement)) continue;
-    toggleTileMedia(el, ent.isIntersecting);
-  }
-}, {
-  root: stageWrap,
-  rootMargin: "256px 0px",
-  threshold: 0.25
-});
 
 /* ===========================================
    OPTIONAL: Preload-Checkbox
@@ -330,9 +395,7 @@ async function preloadAllVideos() {
       if (!el || el.classList.contains("failed")) continue;
       try {
         if (!el.querySelector("video")) {
-          const v = document.createElement("video");
-          v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
-          v.src = `${CFG.API}/video/${i}`;
+          const v = makeVideo(i, `${CFG.API}/thumb/${i}`);
           v.onerror = ()=> el.classList.add("failed");
           const old = el.firstChild; if (old) el.removeChild(old);
           el.prepend(v);
@@ -359,7 +422,7 @@ stageWrap.addEventListener("scroll", ()=> {
   const windowRows = [row-2, row-1, row, row+1, row+2].filter(r => r>=0 && r<CFG.ROWS);
   windowRows.forEach(r=>{
     const from = r*r;
-    const to   = from + (2*r + 1) - 1; // start + cols - 1
+    const to   = from + (2*r + 1) - 1;
     loadMetaBatch(from, to).catch(()=>{});
     loadStatusBatch(from, to).catch(()=>{});
   });
@@ -383,15 +446,15 @@ jumpBtn.onclick = () => {
 
 document.addEventListener("keydown", (e)=>{
   userInteracted = true;
-  if (e.key === "+" || e.key === "=") setScale(scale+.1);
-  else if (e.key === "-" || e.key === "_") setScale(scale-.1);
+  if (e.key === "+" || e.key === "=") { setScale(scale+.1); visibleSwap(); }
+  else if (e.key === "-" || e.key === "_") { setScale(scale-.1); visibleSwap(); }
   else if (e.key.toLowerCase() === "f") scrollToIndex(focusedIndex, true);
   else if (e.key === "ArrowDown") { focusedIndex = Math.min(TOTAL-1, focusedIndex+1); scrollToIndex(focusedIndex); }
   else if (e.key === "ArrowUp") { focusedIndex = Math.max(0, focusedIndex-1); scrollToIndex(focusedIndex); }
 });
 
 /* ===========================================
-   SSE Heartbeats
+   SSE Heartbeats (ggf. /stream nutzen, wenn Blocker)
    =========================================== */
 function connectEvents() {
   try {
@@ -405,13 +468,12 @@ function connectEvents() {
    =========================================== */
 (function boot(){
   layoutPyramid();
-  Array.from(stage.children).forEach(el => io.observe(el)); // Sichtbarkeit beobachten
   requestAnimationFrame(setInitialView);
   connectEvents();
 
-  // Meta & Status in Wellen (bremst Browser nicht aus)
+  // Meta & Status in Wellen
   (async ()=>{
-    const windowSize = 300;
+    const windowSize = 150; // kleinere Wellen schonend
     for (let f=0; f<TOTAL; f+=windowSize) {
       const t = Math.min(TOTAL-1, f+windowSize-1);
       loadMetaBatch(f, t).catch(()=>{});
@@ -419,4 +481,9 @@ function connectEvents() {
       await new Promise(r=>setTimeout(r, 40));
     }
   })();
+
+  // Auf Fenstergröße reagieren (neu einpassen solange keine Interaktion)
+  window.addEventListener("resize", ()=>{
+    if (!userInteracted) setInitialView();
+  });
 })();
