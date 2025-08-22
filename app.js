@@ -4,7 +4,7 @@
 
 /* ========= CONFIG ========= */
 const CFG = {
-  API: "/pillary/api",
+  API: "API: "https://inpinity.online/pillary/api",
   ROWS: 100,
   TILE: 32,
   GAP: 4,                  // auf 0 setzen, wenn Kante-auf-Kante gewünscht
