@@ -26,15 +26,23 @@ let scale = 1;
 let focusedIndex = 0;
 const TOTAL = CFG.ROWS * CFG.ROWS;
 
+const api = (p) => fetch(`${CFG.API}${p}`).then(r => {
+  if (!r.ok) throw new Error(`API ${p} -> ${r.status}`);
+  return r.json();
+});
+
+/** Layout: 1,3,5,…  (Startindex Zeile r = (r-1)^2 ; Index = start + col) */
 function layoutPyramid() {
-  let y = 0, index = 0;
+  let y = 0;
   for (let row = 0; row < CFG.ROWS; row++) {
     const cols = 1 + row * 2;
-    let x = 0;
-    for (let c = 0; c < cols; c++, index++) {
+    const xStart = 0;
+    let x = xStart;
+    for (let c = 0; c < cols; c++) {
+      const index = row*row + c; // (row)^2 + c == (row start) + c   (da row bei 0 startet)
       const el = document.createElement("div");
       el.className = "tile";
-      el.dataset.index = index;
+      el.dataset.index = String(index);
       el.tabIndex = 0;
       el.title = `#${index}`;
       el.style.left = x + "px";
@@ -42,10 +50,18 @@ function layoutPyramid() {
       el.style.width = el.style.height = CFG.TILE + "px";
       el.addEventListener("click", onTileClick);
       el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") onTileClick({ currentTarget: el }); });
+
       const img = document.createElement("img");
       img.alt = `#${index}`;
       img.src = `${CFG.API}/thumb/${index}`;
       el.appendChild(img);
+
+      // Digit Overlay (wird später mit Meta befüllt)
+      const badge = document.createElement("div");
+      badge.className = "digit";
+      badge.textContent = ""; // wird via Batch-Meta gesetzt
+      el.appendChild(badge);
+
       stage.appendChild(el);
       x += CFG.TILE + CFG.GAP;
     }
@@ -77,7 +93,31 @@ stageWrap.addEventListener("wheel", (e)=>{
 closeModal.onclick = () => modal.classList.add("hidden");
 function showModal(html){ modalContent.innerHTML = html; modal.classList.remove("hidden"); }
 
-const api = (p) => fetch(`${CFG.API}${p}`).then(r => r.json());
+function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
+
+/** Liest Pi-Digit / Axis / MatchingPair / RarityScore und Status in Batches */
+async function loadMetaBatch(from, to) {
+  const { data } = await api(`/batch/meta?from=${from}&to=${to}`);
+  data.forEach(meta=>{
+    const i = meta.index;
+    const el = tile(i);
+    if (!el) return;
+
+    // Digit / Axis / MatchingPair aus attributes
+    const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
+    const by = (k) => attrs.find(a => (a.trait_type||"").toLowerCase() === k);
+
+    const digit = meta.Digit ?? by("digit")?.value;
+    const axis  = meta.Axis ?? by("axis")?.value;
+    const pair  = meta.MatchingPair ?? by("matchingpair")?.value;
+
+    const badge = el.querySelector(".digit");
+    if (badge && digit != null) badge.textContent = String(digit);
+
+    if (axis === true || axis === "true") el.classList.add("axis");
+    if (pair === true || pair === "true") el.classList.add("pair");
+  });
+}
 
 async function loadStatusBatch(from, to) {
   const { data } = await api(`/batch/status?from=${from}&to=${to}`);
@@ -90,8 +130,6 @@ async function loadStatusBatch(from, to) {
   });
 }
 
-function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
-
 async function onTileClick(e) {
   const el = e.currentTarget;
   const idx = parseInt(el.dataset.index);
@@ -99,13 +137,24 @@ async function onTileClick(e) {
   const meta = await api(`/meta/${idx}`);
   const links = meta.links || {};
   const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
-  const rarityScore = meta.rarity_score ?? (attrs.find(a => a.trait_type?.toLowerCase() === "rarity_score")?.value);
+
+  const rarityScore =
+    meta.rarity_score ??
+    (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarity_score")?.value) ??
+    (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarityscore")?.value);
+
+  const digit = (attrs.find(a => (a.trait_type||"").toLowerCase() === "digit")?.value);
+  const axis  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "axis")?.value);
+  const pair  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "matchingpair")?.value);
 
   const rows = [
     ["Index", `#${idx}`],
     ["Name", meta.name || ""],
     ["Mint", meta.mint || ""],
     ["Symbol", meta.symbol || ""],
+    ["Digit (π)", digit ?? ""],
+    ["Axis", axis ?? ""],
+    ["Matching Pair", pair ?? ""],
     ["Animation", meta.animation_url || meta.properties?.animation_url || ""],
     ["Rarity Score", rarityScore ?? ""],
   ].map(([k,v])=> `<div class="meta-row"><b>${k}</b><div>${(v||"").toString()}</div></div>`).join("");
@@ -116,9 +165,10 @@ async function onTileClick(e) {
 
   const linkHtml = `
     <div class="links">
-      ${meta.mint ? `<a target="_blank" href="${links.magicEdenItem}">Magic Eden</a>` : ""}
-      ${meta.mint ? `<a target="_blank" href="${links.okxNftItem}">OKX</a>` : ""}
-      ${meta.symbol ? `<a target="_blank" href="${links.magicEdenCollection}">Collection</a>` : ""}
+      ${meta.mint ? `<a target="_blank" href="${links.magicEdenItem}">Kaufen @ Magic Eden</a>` : ""}
+      ${meta.mint ? `<a target="_blank" href="${links.okxNftItem}">Kaufen @ OKX</a>` : ""}
+      <a target="_blank" href="https://magiceden.io/marketplace/InPi">Collection</a>
+      <a target="_blank" href="https://solscan.io/account/GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp">Creator</a>
     </div>`;
 
   showModal(`
@@ -138,14 +188,14 @@ function swapMediaForScale() {
       v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
       v.src = `${CFG.API}/video/${idx}`;
       const old = el.firstChild; if (old) el.removeChild(old);
-      el.appendChild(v);
+      el.prepend(v);
       v.play().catch(()=>{});
     } else if (!useVideo && hasVideo) {
       const img = document.createElement("img");
       img.alt = `#${idx}`;
       img.src = `${CFG.API}/thumb/${idx}`;
       const old = el.firstChild; if (old) el.removeChild(old);
-      el.appendChild(img);
+      el.prepend(img);
     }
   }
 }
@@ -164,7 +214,7 @@ async function preloadAllVideos() {
           v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
           v.src = `${CFG.API}/video/${i}`;
           const old = el.firstChild; if (old) el.removeChild(old);
-          el.appendChild(v);
+          el.prepend(v);
           await v.play().catch(()=>{});
         }
       } catch {}
@@ -174,6 +224,7 @@ async function preloadAllVideos() {
 }
 preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
+/** Lazy-Meta pro sichtbarer Zeile (holt Digit/Achse/Pair und setzt Status) */
 let lastScrollY = 0;
 stageWrap.addEventListener("scroll", ()=> {
   const y = stageWrap.scrollTop / (scale || 1);
@@ -185,7 +236,8 @@ stageWrap.addEventListener("scroll", ()=> {
   windowRows.forEach(r=>{
     const from = r*r;
     const to = from + (1 + r*2) - 1;
-    api(`/batch/meta?from=${from}&to=${to}`).catch(()=>{});
+    loadMetaBatch(from, to).catch(()=>{});
+    loadStatusBatch(from, to).catch(()=>{});
   });
 }, { passive:true });
 
@@ -218,7 +270,11 @@ toggleRarity.addEventListener("change", async ()=>{
     const t = Math.min(TOTAL-1, f+windowSize-1);
     const { data } = await api(`/batch/meta?from=${f}&to=${t}`);
     data.forEach(meta=>{
-      const score = meta.rarity_score ?? (meta.attributes||[]).find(a=>`${a.trait_type}`.toLowerCase()==="rarity_score")?.value;
+      const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
+      const score =
+        meta.rarity_score ??
+        (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarity_score")?.value) ??
+        (attrs.find(a=> (a.trait_type||"").toLowerCase()==="rarityscore")?.value);
       if (score != null) {
         const el = tile(meta.index); if (!el) return;
         const s = Number(score);
@@ -238,17 +294,20 @@ function connectEvents() {
 }
 connectEvents();
 
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("./service-worker.js").catch(()=>{});
-}
+/* Für klare Tests: Service Worker erstmal aus (kannst du später wieder aktivieren) */
+// if ("serviceWorker" in navigator) {
+//   navigator.serviceWorker.register("service-worker.js").catch(()=>{});
+// }
 
 layoutPyramid();
 
 (async ()=>{
+  // Erste Wellen: Status + Digit/Axis/Pair
   const windowSize = 300;
   for (let f=0; f<TOTAL; f+=windowSize) {
     const t = Math.min(TOTAL-1, f+windowSize-1);
-    loadStatusBatch(f, t);
+    loadMetaBatch(f, t).catch(()=>{});
+    loadStatusBatch(f, t).catch(()=>{});
     await new Promise(r=>setTimeout(r, 40));
   }
 })();
