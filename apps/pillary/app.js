@@ -1,18 +1,18 @@
 /* ===========================================
    Pi Pillary – zentrale Zahlen-Pyramide (Cheops-Stil)
-   mit Virtualisierung + Lazy-Video + Rarity-Glow + Sales-Highlight
+   mit Virtualisierung + Lazy-Video + Rarity-Glow
+   + Mobile: PNG bevorzugen & Anim-Toggle
    =========================================== */
 
 /* ========= CONFIG ========= */
 const CFG = {
-  API: "https://inpinity.online/pillary/api", // oder "/pillary/api" hinter demselben Host
+  API: "https://inpinity.online/pillary/api", // oder "/pillary/api" wenn unter eigener Domain
   ROWS: 100,
   TILE: 32,
   GAP: 4,
   PRELOAD_CONCURRENCY: 4,
   SCALE_IMG_THRESHOLD: 0.7,
-  INITIAL_ROWS_VISIBLE: 10,
-  SALES_REFRESH_MS: 60_000
+  INITIAL_ROWS_VISIBLE: 10
 };
 
 // Virtualisierung: wie viele Reihen ober/unter View halten
@@ -22,18 +22,27 @@ const RENDER_MARGIN_ROWS = 6;
 window.requestIdleCallback ||= (cb)=> setTimeout(()=>cb({didTimeout:false,timeRemaining:()=>0}), 1);
 window.cancelIdleCallback ||= (id)=> clearTimeout(id);
 
-/* ========= DOM Helper ========= */
-function reqEl(id) { const el = document.getElementById(id); if (!el) throw new Error(`Element #${id} not found`); return el; }
+/* ========= Helpers ========= */
+const ua = navigator.userAgent || "";
+function isMobileUA(){
+  return /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(ua) || navigator.userAgentData?.mobile === true;
+}
+function isLowPowerNet(){
+  const c = navigator.connection || {};
+  return !!c.saveData || /(^|-)2g$/.test(c.effectiveType || "");
+}
 
 /* ========= DOM ========= */
+function reqEl(id){ const el = document.getElementById(id); if(!el) throw new Error(`#${id} fehlt`); return el; }
+
 const stage = reqEl("stage");
 const stageWrap = reqEl("stageWrap");
 const zoomInBtn = reqEl("zoomIn");
 const zoomOutBtn = reqEl("zoomOut");
 const zoomLevel = reqEl("zoomLevel");
-const preloadAllChk = document.getElementById("preloadAll"); // optional vorhanden
+const preloadAllChk = reqEl("preloadAll");
 const toggleRarity = reqEl("toggleRarity");
-const filterSel = reqEl("filter");
+const toggleAnim = reqEl("toggleAnim");
 const jumpTo = reqEl("jumpTo");
 const jumpBtn = reqEl("jumpBtn");
 const modal = reqEl("modal");
@@ -48,19 +57,30 @@ const TOTAL = CFG.ROWS * CFG.ROWS;
 const MAX_PLAYING = 32;
 const playing = new Set();
 const renderedRows = new Set();
-const mintToIndexMap = new Map();   // mint -> index
-let recentSold = new Set();         // mints (24h)
+
+/* Animationen (Videos) global toggelbar + persistent */
+const storedAnim = localStorage.getItem("pillary-anim");
+const ANIM = {
+  // Mobile & LowPower default: AUS; Desktop default: AN
+  enabled: storedAnim !== null ? JSON.parse(storedAnim) : !(isMobileUA() || isLowPowerNet()),
+};
+toggleAnim.checked = !!ANIM.enabled;
+toggleAnim.addEventListener("change", ()=>{
+  ANIM.enabled = toggleAnim.checked;
+  localStorage.setItem("pillary-anim", JSON.stringify(ANIM.enabled));
+  // Sofort umschalten, ohne Scroll nötig
+  refreshVisibleMedia();
+  // Preload-All nur sinnvoll, wenn Animationen an
+  if (!ANIM.enabled) preloadAllChk.checked = false;
+});
 
 /* ========= API ========= */
-async function apiGet(p) {
-  const r = await fetch(`${CFG.API}${p}`);
-  if (!r.ok) throw new Error(`API ${p} -> ${r.status}`);
-  return r.json();
-}
+async function apiGet(p){ const r = await fetch(`${CFG.API}${p}`); if(!r.ok) throw new Error(`API ${p} -> ${r.status}`); return r.json(); }
 
 /* ========= UTIL ========= */
 function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
 function videoTier(){
+  if (!ANIM.enabled) return "med"; // irrelevant wenn ANIM=false (Video wird gar nicht erstellt)
   const net = navigator.connection?.effectiveType || '';
   if (/2g|slow-2g/.test(net)) return "low";
   if (scale < 0.5) return "low";
@@ -71,16 +91,16 @@ function videoUrl(i){ return `${CFG.API}/video/${i}?q=${videoTier()}`; }
 function showModal(html){ modalContent.innerHTML = html; modal.classList.remove("hidden"); }
 closeModalBtn.onclick = () => modal.classList.add("hidden");
 
-/* ========= Layout Frame ========= */
-function layoutFrameOnly() {
+/* ========= LAYOUT ========= */
+function layoutFrameOnly(){
   const unit = CFG.TILE + CFG.GAP;
   const maxCols = 2*(CFG.ROWS - 1) + 1;
   stage.style.width = (maxCols * unit - CFG.GAP) + "px";
   stage.style.height = (unit * CFG.ROWS - CFG.GAP) + "px";
 }
 
-/* ========= Row create/destroy ========= */
-function createRow(row) {
+/* ========= Reihen ========= */
+function createRow(row){
   if (renderedRows.has(row)) return;
   const unit = CFG.TILE + CFG.GAP;
   const maxCols = 2*(CFG.ROWS - 1) + 1;
@@ -93,7 +113,7 @@ function createRow(row) {
   let x = xOffset;
   const frag = document.createDocumentFragment();
 
-  for (let c = 0; c < cols; c++) {
+  for (let c=0; c<cols; c++){
     const index = rowStartIndex + c;
 
     const el = document.createElement("div");
@@ -108,6 +128,7 @@ function createRow(row) {
     el.addEventListener("click", onTileClick);
     el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") onTileClick({ currentTarget: el }); });
 
+    // Start: immer Bild (mobil-schonend)
     const img = document.createElement("img");
     img.alt = `#${index}`;
     img.src = `${CFG.API}/thumb/${index}`;
@@ -125,6 +146,7 @@ function createRow(row) {
   }
   stage.appendChild(frag);
 
+  // Direkt Meta/Status für diese Reihe anstoßen
   const from = rowStartIndex;
   const to   = from + cols - 1;
   loadMetaBatch(from, to).catch(()=>{});
@@ -132,7 +154,8 @@ function createRow(row) {
 
   renderedRows.add(row);
 }
-function destroyRow(row) {
+
+function destroyRow(row){
   if (!renderedRows.has(row)) return;
   const start = row*row;
   const cols  = 2*row+1;
@@ -145,8 +168,8 @@ function destroyRow(row) {
   renderedRows.delete(row);
 }
 
-/* ========= Sichtbare Reihen updaten ========= */
-function updateRenderedRows() {
+/* ========= Sichtbare Reihen aktualisieren ========= */
+function updateRenderedRows(){
   const unit = CFG.TILE + CFG.GAP;
   const y = stageWrap.scrollTop / (scale || 1);
   const topRow = Math.max(0, Math.floor(y / unit) - RENDER_MARGIN_ROWS);
@@ -159,7 +182,7 @@ function updateRenderedRows() {
 }
 
 /* ========= Mediensteuerung ========= */
-function makeVideo(idx, posterUrl) {
+function makeVideo(idx, posterUrl){
   const v = document.createElement("video");
   v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = true;
   v.preload = "metadata"; v.crossOrigin = "anonymous";
@@ -169,11 +192,13 @@ function makeVideo(idx, posterUrl) {
   v.onpause = v.onended = ()=> playing.delete(v);
   return v;
 }
-function toggleTileMedia(el, isVisible) {
+
+function toggleTileMedia(el, isVisible){
   const idx = parseInt(el.dataset.index);
   if (el.classList.contains("failed")) return;
 
-  const wantVideo = isVisible && scale >= CFG.SCALE_IMG_THRESHOLD;
+  // Wenn Animationen aus → immer Bild
+  const wantVideo = ANIM.enabled && isVisible && scale >= CFG.SCALE_IMG_THRESHOLD;
   const hasVideo = !!el.querySelector("video");
 
   if (wantVideo && !hasVideo) {
@@ -192,7 +217,17 @@ function toggleTileMedia(el, isVisible) {
     img.onerror = ()=> el.classList.add("failed");
     const old = el.firstChild; if (old) el.removeChild(old);
     el.prepend(img);
-    el.classList.add("pulse");
+    el.classList.add("pulse"); // zeigt: wartet auf Video-Slot (falls später an)
+  }
+}
+
+/* Alle sichtbaren Tiles an Vorgabe (Anim on/off) anpassen */
+function refreshVisibleMedia(){
+  const wrapRect = stageWrap.getBoundingClientRect();
+  for (const el of stage.children) {
+    const rect = el.getBoundingClientRect();
+    const visible = !(rect.right < wrapRect.left || rect.left > wrapRect.right || rect.bottom < wrapRect.top || rect.top > wrapRect.bottom);
+    toggleTileMedia(el, visible);
   }
 }
 
@@ -206,7 +241,7 @@ const io = new IntersectionObserver((entries)=>{
   }
 }, { root: stageWrap, rootMargin: "128px 0px", threshold: 0.25 });
 
-function visibleSwap() {
+function visibleSwap(){
   const wrapRect = stageWrap.getBoundingClientRect();
   for (const el of stage.children) {
     const rect = el.getBoundingClientRect();
@@ -215,7 +250,9 @@ function visibleSwap() {
     toggleTileMedia(el, visible);
   }
 }
-function forceVideoForTopRows(N) {
+
+function forceVideoForTopRows(N){
+  if (!ANIM.enabled) return;
   for (let row = 0; row < Math.min(N, CFG.ROWS); row++) {
     const cols = 2*row + 1;
     const start = row*row;
@@ -227,8 +264,8 @@ function forceVideoForTopRows(N) {
   }
 }
 
-/* ========= Zoom & Initial ========= */
-function setScale(s, { noSwap = false } = {}) {
+/* ========= Zoom & Initial View ========= */
+function setScale(s, { noSwap = false } = {}){
   const prev = scale;
   scale = Math.max(0.2, Math.min(6, s));
   stage.style.transform = `scale(${scale})`;
@@ -237,11 +274,11 @@ function setScale(s, { noSwap = false } = {}) {
                   (prev >= CFG.SCALE_IMG_THRESHOLD && scale < CFG.SCALE_IMG_THRESHOLD);
   if (!noSwap && crossed) visibleSwap();
 }
-function centerOnApex() {
+function centerOnApex(){
   const midX = Math.max(0, (stage.scrollWidth * scale - stageWrap.clientWidth) / 2);
   stageWrap.scrollTo({ left: midX, top: 0, behavior: "auto" });
 }
-function setInitialView() {
+function setInitialView(){
   const unit = CFG.TILE + CFG.GAP;
   const wanted = CFG.INITIAL_ROWS_VISIBLE * unit - CFG.GAP;
   const h = Math.max(100, stageWrap.clientHeight);
@@ -259,10 +296,6 @@ function setInitialView() {
 zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); visibleSwap(); };
 zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); visibleSwap(); };
 
-toggleRarity.addEventListener("change", ()=> {
-  document.body.classList.toggle("show-heat", toggleRarity.checked);
-});
-
 stageWrap.addEventListener("wheel", (e)=>{
   if (!e.ctrlKey) return; e.preventDefault();
   userInteracted = true;
@@ -275,31 +308,25 @@ stageWrap.addEventListener("wheel", (e)=>{
 });
 
 /* ========= Meta/Status + Rarity ========= */
-async function loadMetaBatch(from, to) {
-  try {
+async function loadMetaBatch(from, to){
+  try{
     const { data } = await apiGet(`/batch/meta?from=${from}&to=${to}`);
     data.forEach(meta=>{
       if (!meta || meta.error) return;
       const i = meta.index;
       const el = tile(i);
       if (!el) return;
-
-      // mint->index map
-      if (meta.mint) mintToIndexMap.set(meta.mint, i);
-
       const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
       const by = (k) => attrs.find(a => (a.trait_type||"").toLowerCase() === k);
 
       const digit = by("digit")?.value ?? meta.Digit;
       const axis  = by("axis")?.value ?? meta.Axis;
       const pair  = by("matchingpair")?.value ?? meta.MatchingPair;
-      const tier  = (by("tier")?.value ?? meta.tier ?? "").toString().toLowerCase();
 
       const badge = el.querySelector(".digit");
       if (badge && digit != null) badge.textContent = String(digit);
       if (axis === true || axis === "true") el.classList.add("axis");
       if (pair === true || pair === "true") el.classList.add("pair");
-      if (tier) el.dataset.tier = tier;
 
       const score =
         meta.rarity_score ??
@@ -312,36 +339,31 @@ async function loadMetaBatch(from, to) {
         el.setAttribute("data-heat","1");
       }
     });
-    // falls Sales schon da sind → Badges setzen
-    updateSoldBadges();
-  } catch {}
+  }catch{}
 }
-async function loadStatusBatch(from, to) {
-  try {
+
+async function loadStatusBatch(from, to){
+  try{
     const { data } = await apiGet(`/batch/status?from=${from}&to=${to}`);
-    data.forEach(s => {
+    data.forEach(s=>{
       const el = tile(s.index);
       if (!el) return;
       if (!s.minted) el.dataset.status = "unminted";
       else if (s.listed) el.dataset.status = "listed";
       else if (s.verified) el.dataset.status = "verified";
-      else el.dataset.status = "minted";
-
       if (s.market && s.market !== "none") {
         el.dataset.market = s.market;
         const t = el.getAttribute("title") || `#${s.index}`;
         const marketTxt = s.market === "both" ? "ME + OKX" : (s.market.toUpperCase());
         el.title = `${t} — listed on ${marketTxt}`;
-      } else {
-        el.dataset.market = "none";
-      }
+      } else el.dataset.market = "none";
     });
-  } catch {}
+  }catch{}
 }
 
 /* ========= Modal ========= */
-async function onTileClick(e) {
-  try {
+async function onTileClick(e){
+  try{
     const el = e.currentTarget;
     const idx = parseInt(el.dataset.index);
     focusedIndex = idx;
@@ -380,29 +402,34 @@ async function onTileClick(e) {
         <a target="_blank" href="https://solscan.io/account/GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp">Creator</a>
       </div>`;
 
+    const mediaHtml = ANIM.enabled
+      ? `<video src="${videoUrl(idx)}" controls muted playsinline loop preload="metadata"
+                poster="${CFG.API}/thumb/${idx}"
+                style="width:100%;margin-top:8px;border-radius:8px"></video>`
+      : `<img src="${CFG.API}/thumb/${idx}" alt="#${idx}" style="width:100%;margin-top:8px;border-radius:8px" />`;
+
     showModal(`
       <h3>${meta.name ?? "Item"} — #${idx}</h3>
       ${rows}${linkHtml}
-      <video src="${videoUrl(idx)}" controls muted playsinline loop preload="metadata"
-             poster="${CFG.API}/thumb/${idx}"
-             style="width:100%;margin-top:8px;border-radius:8px"></video>
+      ${mediaHtml}
     `);
-  } catch (err) {
+  }catch(err){
     console.error("Modal-Fehler:", err);
     alert("Konnte Details nicht laden. Bitte später erneut versuchen.");
   }
 }
 
-/* ========= Preload-All (optional) ========= */
-async function preloadAllVideos() {
+/* ========= Preload-Checkbox ========= */
+async function preloadAllVideos(){
+  if (!ANIM.enabled){ preloadAllChk.checked = false; return; }
   const conc = CFG.PRELOAD_CONCURRENCY;
   let next = 0;
-  async function worker() {
-    while (preloadAllChk?.checked && next < TOTAL) {
+  async function worker(){
+    while (preloadAllChk.checked && ANIM.enabled && next < TOTAL) {
       const i = next++;
       const el = tile(i);
       if (!el || el.classList.contains("failed")) continue;
-      try {
+      try{
         if (!el.querySelector("video")) {
           const v = makeVideo(i, `${CFG.API}/thumb/${i}`);
           v.onerror = ()=> el.classList.add("failed");
@@ -410,12 +437,12 @@ async function preloadAllVideos() {
           el.prepend(v);
           await v.play().catch(()=>{});
         }
-      } catch { el.classList.add("failed"); }
+      }catch{ el.classList.add("failed"); }
     }
   }
   await Promise.all(Array.from({ length: conc }, worker));
 }
-preloadAllChk?.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
+preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
 /* ========= Scroll-Lazy ========= */
 let lastScrollY = 0;
@@ -433,19 +460,19 @@ stageWrap.addEventListener("scroll", ()=> {
     if (row >= 0 && row < CFG.ROWS) {
       const from = row*row;
       const to   = from + (2*row + 1) - 1;
-      try {
+      try{
         await Promise.all([
           apiGet(`/batch/meta?from=${from}&to=${to}`),
           apiGet(`/batch/status?from=${from}&to=${to}`)
         ]);
-      } catch {}
+      }catch{}
     }
   }, { timeout: 1200 });
 
 }, { passive:true });
 
 /* ========= Navigation ========= */
-function scrollToIndex(i, open = false) {
+function scrollToIndex(i, open = false){
   const t = tile(i); if (!t) return;
   stageWrap.scrollTo({ left: t.offsetLeft*scale-100, top: t.offsetTop*scale-100, behavior: "smooth" });
   t.focus();
@@ -465,37 +492,12 @@ document.addEventListener("keydown", (e)=>{
   else if (e.key === "ArrowUp") { focusedIndex = Math.max(0, focusedIndex-1); scrollToIndex(focusedIndex); }
 });
 
-/* ========= Filter ========= */
-filterSel.addEventListener("change", ()=>{
-  stage.dataset.filter = filterSel.value;
-});
-
-/* ========= Recent Sales (24h) ========= */
-function updateSoldBadges(){
-  recentSold.forEach(mint=>{
-    const idx = mintToIndexMap.get(mint);
-    if (idx == null) return;
-    const el = tile(idx);
-    if (el) el.dataset.sold24h = "1";
-  });
-}
-async function refreshRecentSales(){
-  try {
-    const payload = await apiGet(`/recent-sales`);
-    const arr = Array.isArray(payload) ? payload : payload?.mints || [];
-    recentSold = new Set(arr);
-    updateSoldBadges();
-  } catch (e) {
-    // leise
-  }
-}
-
-/* ========= SSE (Heartbeat) ========= */
-function connectEvents() {
-  try {
+/* ========= SSE ========= */
+function connectEvents(){
+  try{
     const es = new EventSource(`${CFG.API}/events`);
     es.onerror = ()=> { es.close(); setTimeout(connectEvents, 5000); };
-  } catch {}
+  }catch{}
 }
 
 /* ========= Boot ========= */
@@ -504,7 +506,7 @@ function connectEvents() {
   requestAnimationFrame(setInitialView);
   connectEvents();
 
-  // Erste ~12 Reihen synchronisieren
+  // Erstmal nur die ersten ~12 Reihen synchronisieren (perceived speed)
   const top = 12;
   const lastTop = top*top + (2*top+1) - 1;
   (async ()=>{
@@ -514,13 +516,6 @@ function connectEvents() {
     ]).catch(()=>{});
     updateRenderedRows();
   })();
-
-  // Rarity default aus
-  document.body.classList.toggle("show-heat", false);
-
-  // Recent Sales laden + Poll
-  refreshRecentSales();
-  setInterval(refreshRecentSales, CFG.SALES_REFRESH_MS);
 
   window.addEventListener("resize", ()=>{
     if (!userInteracted) setInitialView();
