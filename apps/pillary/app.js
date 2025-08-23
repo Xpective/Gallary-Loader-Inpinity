@@ -59,6 +59,40 @@ const ANIM = {
 if (toggleAnim) {
   toggleAnim.checked = !!ANIM.enabled;
 }
+// --- WALLET (nur Phantom, minimal) ---
+const wallet = {
+  pubkey: null,
+  get connected(){ return !!this.pubkey; }
+};
+
+const walletBtn = document.getElementById("walletBtn");
+function updateWalletBtn(){
+  if (!walletBtn) return;
+  walletBtn.textContent = wallet.connected
+    ? `● ${wallet.pubkey.slice(0,4)}…${wallet.pubkey.slice(-4)}`
+    : "Connect Wallet";
+  walletBtn.classList.toggle("connected", wallet.connected);
+}
+async function connectWallet(){
+  try{
+    const p = window.solana;
+    if (!p || !p.isPhantom) {
+      window.open("https://phantom.app/download", "_blank", "noopener");
+      return;
+    }
+    const res = await p.connect({ onlyIfTrusted:false });
+    wallet.pubkey = res?.publicKey?.toString() || null;
+  }catch(e){ /* user rejected */ }
+  updateWalletBtn();
+}
+async function disconnectWallet(){
+  try{ await window.solana?.disconnect?.(); }catch{}
+  wallet.pubkey = null; updateWalletBtn();
+}
+walletBtn?.addEventListener("click", ()=>{
+  if (wallet.connected) disconnectWallet(); else connectWallet();
+});
+updateWalletBtn();
 
 /* ========= API – Throttle Queue ========= */
 function apiUrl(p){ return `${CFG.API}${p}`; }
@@ -415,9 +449,15 @@ async function onTileClick(e){
     const idx = parseInt(el.dataset.index);
     focusedIndex = idx;
 
-    const meta = await apiGetThrottled(`/meta/${idx}`);
+    // Meta + Status laden
+    const [meta, status] = await Promise.all([
+      apiGetThrottled(`/meta/${idx}`),
+      apiGetThrottled(`/status/${idx}`)
+    ]);
+
     const links = meta.links || {};
     const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
+
     const rarityScore =
       meta.rarity_score ??
       (attrs.find(a => (a.trait_type||"").toLowerCase() === "rarity_score")?.value) ??
@@ -427,34 +467,60 @@ async function onTileClick(e){
     const axis  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "axis")?.value);
     const pair  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "matchingpair")?.value);
 
-    const rows = [
-      ["Index", `#${idx}`],
-      ["Name", meta.name || ""],
-      ["Mint", meta.mint || ""],
-      ["Symbol", meta.symbol || ""],
-      ["Digit (π)", digit ?? ""],
-      ["Axis", axis ?? ""],
-      ["Matching Pair", pair ?? ""],
-      ["Animation", meta.animation_url || meta.properties?.animation_url || ""],
-      ["Rarity Score", rarityScore ?? ""],
-    ].map(([k,v])=> `<div class="meta-row"><b>${k}</b><div>${(v||"").toString()}</div></div>`).join("");
+    // ---- Market-CTAs (nur wenn gelistet) ----
+    const ctas = [];
+    const mint = meta.mint || "";
+    // Magic Eden
+    if (status.listed && (status.market === "me" || status.market === "both")) {
+      const meUrl = links.magicEdenItem || `https://magiceden.io/item-details/${mint}`;
+      ctas.push(`<a class="btn" target="_blank" rel="noopener" href="${meUrl}">Buy on Magic Eden</a>`);
+    }
+    // OKX
+    if (status.listed && (status.market === "okx" || status.market === "both")) {
+      const okxUrl = links.okxNftItem || `https://www.okx.com/web3/market/nft/sol/${mint}`;
+      ctas.push(`<a class="btn" target="_blank" rel="noopener" href="${okxUrl}">Buy on OKX</a>`);
+    }
+    // Optional: Tensor als Fallback-Link
+    if (mint) {
+      ctas.push(`<a class="btn subtle" target="_blank" rel="noopener" href="https://www.tensor.trade/item/${mint}">View on Tensor</a>`);
+    }
+    // Immer nützlich:
+    if (mint) {
+      ctas.push(`<a class="btn subtle" target="_blank" rel="noopener" href="https://solscan.io/token/${mint}">Solscan</a>`);
+      ctas.push(`<button class="btn subtle" onclick="navigator.clipboard.writeText('${mint}').catch(()=>{})">Copy Mint</button>`);
+    }
+    const ctasHtml = ctas.length
+      ? `<div class="cta-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${ctas.join("")}</div>`
+      : `<div class="cta-row" style="margin-top:8px;color:#9fb6d1">Kein Listing gefunden.</div>`;
 
+    // ---- Medien (Video nur wenn ANIM.enabled) ----
     const mediaHtml = (ANIM.enabled)
       ? `<video src="${videoUrl(idx)}" controls muted playsinline loop preload="metadata"
                 poster="${CFG.API}/thumb/${idx}"
                 style="width:100%;margin-top:8px;border-radius:8px"></video>`
       : `<img src="${CFG.API}/thumb/${idx}" alt="#${idx}" style="width:100%;margin-top:8px;border-radius:8px" />`;
 
-    const linkHtml = `
-      <div class="links" style="margin-top:8px;display:flex;gap:10px;flex-wrap:wrap">
-        ${meta.mint ? `<a target="_blank" href="${links.magicEdenItem}">Kaufen @ Magic Eden</a>` : ""}
-        ${meta.mint ? `<a target="_blank" href="${links.okxNftItem}">Kaufen @ OKX</a>` : ""}
-        <a target="_blank" href="https://magiceden.io/marketplace/inpi">Collection @ Magic Eden</a>
-        <a target="_blank" href="https://web3.okx.com/ul/FOFXecp">Token @ OKX</a>
-        <a target="_blank" href="https://solscan.io/account/GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp">Creator</a>
-      </div>`;
+    // ---- Metatabelle ----
+    const rows = [
+      ["Index", `#${idx}`],
+      ["Name", meta.name || ""],
+      ["Mint", mint],
+      ["Symbol", meta.symbol || ""],
+      ["Digit (π)", digit ?? ""],
+      ["Axis", axis ?? ""],
+      ["Matching Pair", pair ?? ""],
+      ["Rarity Score", rarityScore ?? ""],
+      ["Listed", String(!!status.listed)],
+      ["Market", status.market || "none"],
+      ["Sold 24h", status.sold24h ? "yes" : "no"]
+    ].map(([k,v])=> `<div class="meta-row"><b>${k}</b><div>${(v||"").toString()}</div></div>`).join("");
 
-    showModal(`<h3>${meta.name ?? "Item"} — #${idx}</h3>${rows}${linkHtml}${mediaHtml}`);
+    showModal(`
+      <h3>${meta.name ?? "Item"} — #${idx}</h3>
+      ${rows}
+      ${ctasHtml}
+      ${mediaHtml}
+    `);
   }catch(err){
     console.error("Modal-Fehler:", err);
     alert("Konnte Details nicht laden. Bitte später erneut versuchen.");
