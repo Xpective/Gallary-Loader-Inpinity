@@ -1,17 +1,18 @@
 /* ===========================================
    Pi Pillary – zentrale Zahlen-Pyramide (Cheops-Stil)
-   mit Virtualisierung + Lazy-Video + Rarity-Glow
+   mit Virtualisierung + Lazy-Video + Rarity-Glow + Sales-Highlight
    =========================================== */
 
 /* ========= CONFIG ========= */
 const CFG = {
-  API: "https://inpinity.online/pillary/api", // oder "/pillary/api" wenn unter eigener Domain
+  API: "https://inpinity.online/pillary/api", // oder "/pillary/api" hinter demselben Host
   ROWS: 100,
   TILE: 32,
   GAP: 4,
   PRELOAD_CONCURRENCY: 4,
   SCALE_IMG_THRESHOLD: 0.7,
-  INITIAL_ROWS_VISIBLE: 10
+  INITIAL_ROWS_VISIBLE: 10,
+  SALES_REFRESH_MS: 60_000
 };
 
 // Virtualisierung: wie viele Reihen ober/unter View halten
@@ -22,11 +23,7 @@ window.requestIdleCallback ||= (cb)=> setTimeout(()=>cb({didTimeout:false,timeRe
 window.cancelIdleCallback ||= (id)=> clearTimeout(id);
 
 /* ========= DOM Helper ========= */
-function reqEl(id) {
-  const el = document.getElementById(id);
-  if (!el) throw new Error(`Element #${id} not found`);
-  return el;
-}
+function reqEl(id) { const el = document.getElementById(id); if (!el) throw new Error(`Element #${id} not found`); return el; }
 
 /* ========= DOM ========= */
 const stage = reqEl("stage");
@@ -34,8 +31,9 @@ const stageWrap = reqEl("stageWrap");
 const zoomInBtn = reqEl("zoomIn");
 const zoomOutBtn = reqEl("zoomOut");
 const zoomLevel = reqEl("zoomLevel");
-const preloadAllChk = reqEl("preloadAll");
+const preloadAllChk = document.getElementById("preloadAll"); // optional vorhanden
 const toggleRarity = reqEl("toggleRarity");
+const filterSel = reqEl("filter");
 const jumpTo = reqEl("jumpTo");
 const jumpBtn = reqEl("jumpBtn");
 const modal = reqEl("modal");
@@ -50,6 +48,8 @@ const TOTAL = CFG.ROWS * CFG.ROWS;
 const MAX_PLAYING = 32;
 const playing = new Set();
 const renderedRows = new Set();
+const mintToIndexMap = new Map();   // mint -> index
+let recentSold = new Set();         // mints (24h)
 
 /* ========= API ========= */
 async function apiGet(p) {
@@ -68,13 +68,10 @@ function videoTier(){
   return "high";
 }
 function videoUrl(i){ return `${CFG.API}/video/${i}?q=${videoTier()}`; }
-function showModal(html){
-  modalContent.innerHTML = html;
-  modal.classList.remove("hidden");
-}
+function showModal(html){ modalContent.innerHTML = html; modal.classList.remove("hidden"); }
 closeModalBtn.onclick = () => modal.classList.add("hidden");
 
-/* ========= LAYOUT-Rahmen (nur Größe, noch keine Tiles) ========= */
+/* ========= Layout Frame ========= */
 function layoutFrameOnly() {
   const unit = CFG.TILE + CFG.GAP;
   const maxCols = 2*(CFG.ROWS - 1) + 1;
@@ -82,7 +79,7 @@ function layoutFrameOnly() {
   stage.style.height = (unit * CFG.ROWS - CFG.GAP) + "px";
 }
 
-/* ========= Eine Reihe bauen/entfernen ========= */
+/* ========= Row create/destroy ========= */
 function createRow(row) {
   if (renderedRows.has(row)) return;
   const unit = CFG.TILE + CFG.GAP;
@@ -128,7 +125,6 @@ function createRow(row) {
   }
   stage.appendChild(frag);
 
-  // Direkt Meta/Status für diese Reihe anstoßen
   const from = rowStartIndex;
   const to   = from + cols - 1;
   loadMetaBatch(from, to).catch(()=>{});
@@ -136,7 +132,6 @@ function createRow(row) {
 
   renderedRows.add(row);
 }
-
 function destroyRow(row) {
   if (!renderedRows.has(row)) return;
   const start = row*row;
@@ -150,7 +145,7 @@ function destroyRow(row) {
   renderedRows.delete(row);
 }
 
-/* ========= Sichtbare Reihen updaten (Virtualisierung) ========= */
+/* ========= Sichtbare Reihen updaten ========= */
 function updateRenderedRows() {
   const unit = CFG.TILE + CFG.GAP;
   const y = stageWrap.scrollTop / (scale || 1);
@@ -174,7 +169,6 @@ function makeVideo(idx, posterUrl) {
   v.onpause = v.onended = ()=> playing.delete(v);
   return v;
 }
-
 function toggleTileMedia(el, isVisible) {
   const idx = parseInt(el.dataset.index);
   if (el.classList.contains("failed")) return;
@@ -198,7 +192,7 @@ function toggleTileMedia(el, isVisible) {
     img.onerror = ()=> el.classList.add("failed");
     const old = el.firstChild; if (old) el.removeChild(old);
     el.prepend(img);
-    el.classList.add("pulse"); // zeigt: wartet auf Video-Slot
+    el.classList.add("pulse");
   }
 }
 
@@ -221,7 +215,6 @@ function visibleSwap() {
     toggleTileMedia(el, visible);
   }
 }
-
 function forceVideoForTopRows(N) {
   for (let row = 0; row < Math.min(N, CFG.ROWS); row++) {
     const cols = 2*row + 1;
@@ -234,7 +227,7 @@ function forceVideoForTopRows(N) {
   }
 }
 
-/* ========= Zoom & Initial View ========= */
+/* ========= Zoom & Initial ========= */
 function setScale(s, { noSwap = false } = {}) {
   const prev = scale;
   scale = Math.max(0.2, Math.min(6, s));
@@ -244,12 +237,10 @@ function setScale(s, { noSwap = false } = {}) {
                   (prev >= CFG.SCALE_IMG_THRESHOLD && scale < CFG.SCALE_IMG_THRESHOLD);
   if (!noSwap && crossed) visibleSwap();
 }
-
 function centerOnApex() {
   const midX = Math.max(0, (stage.scrollWidth * scale - stageWrap.clientWidth) / 2);
   stageWrap.scrollTo({ left: midX, top: 0, behavior: "auto" });
 }
-
 function setInitialView() {
   const unit = CFG.TILE + CFG.GAP;
   const wanted = CFG.INITIAL_ROWS_VISIBLE * unit - CFG.GAP;
@@ -258,7 +249,7 @@ function setInitialView() {
   setScale(targetScale, { noSwap: true });
   requestAnimationFrame(() => {
     centerOnApex();
-    updateRenderedRows();          // baut die sichtbaren Reihen
+    updateRenderedRows();
     visibleSwap();
     forceVideoForTopRows(CFG.INITIAL_ROWS_VISIBLE);
   });
@@ -267,6 +258,10 @@ function setInitialView() {
 /* ========= Controls ========= */
 zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); visibleSwap(); };
 zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); visibleSwap(); };
+
+toggleRarity.addEventListener("change", ()=> {
+  document.body.classList.toggle("show-heat", toggleRarity.checked);
+});
 
 stageWrap.addEventListener("wheel", (e)=>{
   if (!e.ctrlKey) return; e.preventDefault();
@@ -288,17 +283,23 @@ async function loadMetaBatch(from, to) {
       const i = meta.index;
       const el = tile(i);
       if (!el) return;
+
+      // mint->index map
+      if (meta.mint) mintToIndexMap.set(meta.mint, i);
+
       const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
       const by = (k) => attrs.find(a => (a.trait_type||"").toLowerCase() === k);
 
       const digit = by("digit")?.value ?? meta.Digit;
       const axis  = by("axis")?.value ?? meta.Axis;
       const pair  = by("matchingpair")?.value ?? meta.MatchingPair;
+      const tier  = (by("tier")?.value ?? meta.tier ?? "").toString().toLowerCase();
 
       const badge = el.querySelector(".digit");
       if (badge && digit != null) badge.textContent = String(digit);
       if (axis === true || axis === "true") el.classList.add("axis");
       if (pair === true || pair === "true") el.classList.add("pair");
+      if (tier) el.dataset.tier = tier;
 
       const score =
         meta.rarity_score ??
@@ -311,9 +312,10 @@ async function loadMetaBatch(from, to) {
         el.setAttribute("data-heat","1");
       }
     });
+    // falls Sales schon da sind → Badges setzen
+    updateSoldBadges();
   } catch {}
 }
-
 async function loadStatusBatch(from, to) {
   try {
     const { data } = await apiGet(`/batch/status?from=${from}&to=${to}`);
@@ -323,6 +325,8 @@ async function loadStatusBatch(from, to) {
       if (!s.minted) el.dataset.status = "unminted";
       else if (s.listed) el.dataset.status = "listed";
       else if (s.verified) el.dataset.status = "verified";
+      else el.dataset.status = "minted";
+
       if (s.market && s.market !== "none") {
         el.dataset.market = s.market;
         const t = el.getAttribute("title") || `#${s.index}`;
@@ -389,12 +393,12 @@ async function onTileClick(e) {
   }
 }
 
-/* ========= Preload-Checkbox ========= */
+/* ========= Preload-All (optional) ========= */
 async function preloadAllVideos() {
   const conc = CFG.PRELOAD_CONCURRENCY;
   let next = 0;
   async function worker() {
-    while (preloadAllChk.checked && next < TOTAL) {
+    while (preloadAllChk?.checked && next < TOTAL) {
       const i = next++;
       const el = tile(i);
       if (!el || el.classList.contains("failed")) continue;
@@ -411,7 +415,7 @@ async function preloadAllVideos() {
   }
   await Promise.all(Array.from({ length: conc }, worker));
 }
-preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
+preloadAllChk?.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
 /* ========= Scroll-Lazy ========= */
 let lastScrollY = 0;
@@ -461,7 +465,32 @@ document.addEventListener("keydown", (e)=>{
   else if (e.key === "ArrowUp") { focusedIndex = Math.max(0, focusedIndex-1); scrollToIndex(focusedIndex); }
 });
 
-/* ========= SSE ========= */
+/* ========= Filter ========= */
+filterSel.addEventListener("change", ()=>{
+  stage.dataset.filter = filterSel.value;
+});
+
+/* ========= Recent Sales (24h) ========= */
+function updateSoldBadges(){
+  recentSold.forEach(mint=>{
+    const idx = mintToIndexMap.get(mint);
+    if (idx == null) return;
+    const el = tile(idx);
+    if (el) el.dataset.sold24h = "1";
+  });
+}
+async function refreshRecentSales(){
+  try {
+    const payload = await apiGet(`/recent-sales`);
+    const arr = Array.isArray(payload) ? payload : payload?.mints || [];
+    recentSold = new Set(arr);
+    updateSoldBadges();
+  } catch (e) {
+    // leise
+  }
+}
+
+/* ========= SSE (Heartbeat) ========= */
 function connectEvents() {
   try {
     const es = new EventSource(`${CFG.API}/events`);
@@ -471,11 +500,11 @@ function connectEvents() {
 
 /* ========= Boot ========= */
 (function boot(){
-  layoutFrameOnly();            // nur Rahmen
+  layoutFrameOnly();
   requestAnimationFrame(setInitialView);
   connectEvents();
 
-  // Erstmal nur die ersten ~12 Reihen synchronisieren (perceived speed)
+  // Erste ~12 Reihen synchronisieren
   const top = 12;
   const lastTop = top*top + (2*top+1) - 1;
   (async ()=>{
@@ -485,6 +514,13 @@ function connectEvents() {
     ]).catch(()=>{});
     updateRenderedRows();
   })();
+
+  // Rarity default aus
+  document.body.classList.toggle("show-heat", false);
+
+  // Recent Sales laden + Poll
+  refreshRecentSales();
+  setInterval(refreshRecentSales, CFG.SALES_REFRESH_MS);
 
   window.addEventListener("resize", ()=>{
     if (!userInteracted) setInitialView();
