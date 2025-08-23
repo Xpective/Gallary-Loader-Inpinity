@@ -32,6 +32,16 @@ a{color:#a78bfa;text-decoration:none}
 }
 .controls .chk{display:flex;align-items:center;gap:6px;color:#b6c2d2}
 
+
+
+.btn{
+  background:#1f2937;border:1px solid #263240;color:#cbd5e1;
+  padding:6px 10px;border-radius:6px;cursor:pointer;text-decoration:none;display:inline-block
+}
+.btn.subtle{ opacity:.8 }
+.btn:hover{ opacity:1; border-color:#3b82f6 }
+
+
 /* Galerie-Viewport */
 #stageWrap{position:relative;overflow:auto;height:calc(100% - 96px)}
 #stage{transform-origin:0 0; position:relative; padding:24px; width:max-content}
