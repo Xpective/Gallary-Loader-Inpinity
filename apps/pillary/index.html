@@ -2,44 +2,44 @@
 <html lang="de">
 <head>
   <meta charset="utf-8" />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Crect width='100%25' height='100%25' fill='%230b0f14'/%3E%3Ctext x='50%25' y='56%25' dominant-baseline='middle' text-anchor='middle' font-size='42' fill='%23a78bfa'%3E%CF%80%3C/text%3E%3C/svg%3E">
   <meta http-equiv="x-ua-compatible" content="ie=edge" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Pillary — Pi-Pyramide Galerie</title>
-  <meta name="description" content="Zentrierte Pi-Pyramide: 3 / 1,4,1 / 5,9,2,6,5 … mit Zoom, Live-Status und Video-Tiles." />
+  <meta name="description" content="Zentrierte Pi-Pyramide mit Virtual Grid, Lazy Video, Rarity-Overlay und schnellem IPFS/R2-Proxy." />
+
+  <!-- Favicon-Stub verhindert 404 -->
+  <link rel="icon" href="data:,">
+
+  <!-- Externe Styles -->
   <link rel="stylesheet" href="styles.css" />
-  <style>body{background:#0b0f14;color:#dfe7f1;font:14px/1.4 system-ui;margin:0}.boot{padding:12px;color:#9fb6d1}</style>
 </head>
 <body>
-  <div class="boot">Pillary lädt …</div>
-
+  <!-- Oben: Topbar (kein Overlay/Blur) -->
   <header class="topbar">
-    <!-- in <header class="topbar"> ... <div class="controls"> -->
-<label class="chk" title="Animation (Videos) an/aus">
-  <input id="toggleAnim" type="checkbox"> Animation
-</label>
-    <h1>Pi Pillary</h1>
+    <h1>Pillary</h1>
+
     <nav class="links-inline">
       <a href="https://inpinity.online" target="_blank" rel="noopener">inpinity.online</a>
       <a href="https://magiceden.io/marketplace/inpi" target="_blank" rel="noopener">Collection @ Magic Eden</a>
       <a href="https://web3.okx.com/ul/FOFXecp" target="_blank" rel="noopener">Token @ OKX</a>
       <a href="https://solscan.io/account/GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp" target="_blank" rel="noopener">Creator</a>
     </nav>
+
     <div class="controls">
       <button id="zoomOut" title="Zoom out (–)">−</button>
       <span id="zoomLevel">100%</span>
       <button id="zoomIn" title="Zoom in (+)">+</button>
 
-      <label class="chk" title="Animationen (Videos) ein/aus">
-        <input id="toggleAnim" type="checkbox"> Animationen (Video)
+      <label class="chk" title="Animation (Videos) ein/aus">
+        <input id="toggleAnim" type="checkbox"> Animation
       </label>
 
-      <label class="chk" title="Alle Videos in Wellen vorladen (nur wenn Animationen aktiv)">
+      <label class="chk" title="Rarity-Heatmap Overlay ein/aus">
+        <input id="toggleRarity" type="checkbox"> Rarity
+      </label>
+
+      <label class="chk" title="Alle Videos in Wellen vorladen (nur wenn Animation an)">
         <input id="preloadAll" type="checkbox"> alles vorladen
-      </label>
-
-      <label class="chk" title="Rarity-Heatmap overlay (wenn Score vorhanden)">
-        <input id="toggleRarity" type="checkbox"> Rarity-Heatmap
       </label>
 
       <input id="jumpTo" type="number" min="0" max="9999" placeholder="# jump" />
@@ -47,27 +47,46 @@
     </div>
   </header>
 
-  <main id="stageWrap"><div id="stage" aria-label="NFT-Pi-Pyramide"></div></main>
+  <!-- Galerie -->
+  <main id="stageWrap" aria-label="Galerie-Ansicht">
+    <div id="stage" aria-label="NFT-Pi-Pyramide"></div>
+  </main>
 
-  <footer class="foot">
-    <div>
-      Creator: <code class="mono">GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp</code> ·
-      Collection: <code class="mono">6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ</code>
+  <!-- Nach der Galerie: „Body“-Inhalt / Footer etc. -->
+  <section class="page-body">
+    <div class="page-body__inner">
+      <h2>Über das Projekt</h2>
+      <p>
+        Die Pi-Pyramide stellt die Ziffern von π als zentriertes Dreieck dar –
+        mit Live-Status (unminted, listed, verified), optionalen Video-Tiles und Rarity-Heatmap.
+      </p>
+
+      <div class="meta-inline">
+        <div>Creator: <code class="mono">GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp</code></div>
+        <div>Collection: <code class="mono">6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ</code></div>
+      </div>
+
+      <p class="donate">
+        Gefällt dir das Projekt? Du kannst die Entwicklung gern freiwillig unterstützen –
+        jeder kleine Beitrag hilft beim Ausbau von Infrastruktur & Inhalten. Danke! 💜
+      </p>
     </div>
-    <div class="donate">
-      Gefällt dir das Projekt? Du kannst die Entwicklung gern freiwillig unterstützen –
-      jeder kleine Beitrag hilft beim Ausbau von Infrastruktur & Inhalten. Danke! 💜
-    </div>
-  </footer>
+  </section>
 
-  <script type="module">const b=document.querySelector(".boot"); if(b) b.textContent="Pillary initialisiert …";</script>
-  <script type="module" src="app.js"></script>
-  <noscript>Bitte JavaScript aktivieren.</noscript>
-
-  <!-- Modal -->
-  <div id="modal" class="hidden">
+  <!-- Modal (Detailansicht) -->
+  <div id="modal" class="hidden" role="dialog" aria-modal="true">
     <div id="modalContent" class="modal-body"></div>
-    <button id="closeModal">Schließen</button>
+    <button id="closeModal" aria-label="Modal schließen">Schließen</button>
   </div>
+
+  <!-- App -->
+  <script type="module" src="app.js"></script>
+
+  <!-- Optional: Service Worker registrieren -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(()=>{});
+    }
+  </script>
 </body>
 </html>
