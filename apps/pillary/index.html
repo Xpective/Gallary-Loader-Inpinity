@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="x-ua-compatible" content="ie=edge" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Pillary — Pi-Pyramide Galerie</title>
   <meta name="description" content="Zentrierte Pi-Pyramide: 3 / 1,4,1 / 5,9,2,6,5 … mit Zoom, Live-Status und Video-Tiles." />
   <link rel="stylesheet" href="styles.css" />
@@ -25,17 +25,17 @@
       <span id="zoomLevel">100%</span>
       <button id="zoomIn" title="Zoom in (+)">+</button>
 
+      <label class="chk" title="Animationen (Videos) ein/aus">
+        <input id="toggleAnim" type="checkbox"> Animationen (Video)
+      </label>
+
+      <label class="chk" title="Alle Videos in Wellen vorladen (nur wenn Animationen aktiv)">
+        <input id="preloadAll" type="checkbox"> alles vorladen
+      </label>
+
       <label class="chk" title="Rarity-Heatmap overlay (wenn Score vorhanden)">
         <input id="toggleRarity" type="checkbox"> Rarity-Heatmap
       </label>
-
-      <select id="filter" title="Filtern">
-        <option value="all">Alle</option>
-        <option value="unminted">Nur ungemintet</option>
-        <option value="minted">Nur gemintet</option>
-        <option value="listed">Nur gelistet</option>
-        <option value="sold24h">Verkauft (24h)</option>
-      </select>
 
       <input id="jumpTo" type="number" min="0" max="9999" placeholder="# jump" />
       <button id="jumpBtn">Go</button>
