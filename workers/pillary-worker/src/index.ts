@@ -6,7 +6,6 @@ export interface Env {
   RPC: string;
   PAGES_HOST: string;
 
-  // Collection Meta (optional)
   COLLECTION_NAME?: string;
   COLLECTION_SYMBOL?: string;
   COLLECTION_DESCRIPTION?: string;
@@ -16,16 +15,14 @@ export interface Env {
   COLLECTION_CERT_URL?: string;
   OKX_TOKEN_URL?: string;
 
-  // Video CIDs (optional je Qualität)
   VIDEO_BASE_CID_LOW?: string;
   VIDEO_BASE_CID_MED?: string;
   VIDEO_BASE_CID_HIGH?: string;
 
-  // Optionales R2-Binding (für Video-Mirror)
-  R2?: R2Bucket;
+  ME_API_KEY?: string;      // <- optionaler Magic Eden API-Key
+  R2?: R2Bucket;            // R2 Binding
 }
 
-// (Workers hat R2Bucket-Typ, hier nur zur Sicherheit)
 type R2Bucket = {
   get(key: string, opts?: any): Promise<any>;
   put(key: string, value: any, opts?: any): Promise<any>;
@@ -53,12 +50,12 @@ function gateways(env: Env) {
   const list = (env.IPFS_GATEWAYS || "").split(",").map(s => s.trim()).filter(Boolean);
   return list.length ? list : ["https://ipfs.inpinity.online","https://cloudflare-ipfs.com","https://ipfs.io"];
 }
-
 function toHttpFromIpfs(gw: string, uri: string) {
   if (uri?.startsWith?.("ipfs://")) return `${gw}/ipfs/${uri.slice("ipfs://".length)}`;
   return uri;
 }
 
+/* ------------ Edge Cache Helper ------------ */
 async function fetchWithCache(req: Request, maxAge = 3600) {
   const cache = caches.default;
   const hit = await cache.match(req);
@@ -81,6 +78,7 @@ async function fetchWithCache(req: Request, maxAge = 3600) {
   return resp;
 }
 
+/* ------------ IPFS JSON ------------ */
 async function fetchJsonFromCid(env: Env, path: string) {
   let lastErr: any = null;
   for (const gw of gateways(env)) {
@@ -97,6 +95,7 @@ async function fetchJsonFromCid(env: Env, path: string) {
   throw lastErr || new Error("JSON not reachable");
 }
 
+/* ------------ Media Collect ------------ */
 function pickVideoCidsByQ(env: Env, q: string|undefined) {
   const tier = (q||"med").toLowerCase();
   const order = tier === "low" ? ["VIDEO_BASE_CID_LOW","VIDEO_BASE_CID_MED","VIDEO_BASE_CID_HIGH"]
@@ -109,18 +108,14 @@ function pickVideoCidsByQ(env: Env, q: string|undefined) {
   }
   return list;
 }
-
 function collectMediaCandidates(env: Env, meta: any, index?: number, q?: string) {
   const arr: string[] = [];
   const push = (v: any) => { if (!v) return; if (Array.isArray(v)) v.forEach(push); else arr.push(String(v)); };
 
-  // 1) Priorisierte Video-Ordner nach Qualität
   if (Number.isFinite(index)) {
     const cids = pickVideoCidsByQ(env, q);
     for (const gw of gateways(env)) for (const cid of cids) arr.push(`${gw}/ipfs/${cid}/${index}.mp4`);
   }
-
-  // 2) Standardfelder aus Metadata
   push(meta.animation_url);
   push(meta.properties?.animation_url);
   const files = meta.properties?.files;
@@ -130,13 +125,12 @@ function collectMediaCandidates(env: Env, meta: any, index?: number, q?: string)
       if (!f?.type || /video|mp4|quicktime|webm/i.test(String(f.type))) push(f.uri);
     });
   }
-
-  // 3) Fallback: images
   push(meta.image);
   push(meta.properties?.image);
   return Array.from(new Set(arr));
 }
 
+/* ------------ Meta + Status ------------ */
 async function metaByIndex(env: Env, index: number) {
   const meta = await fetchJsonFromCid(env, `${index}.json`);
   const mint = meta.mint ?? meta.properties?.mint ?? null;
@@ -152,12 +146,10 @@ async function metaByIndex(env: Env, index: number) {
   };
   return { index, ...meta, links };
 }
-
 async function metaByIndexSafe(env: Env, index: number) {
   try { return await metaByIndex(env, index); }
   catch (e:any) { return { index, error: String(e?.message || e) }; }
 }
-
 async function statusByIndex(env: Env, index: number) {
   try {
     const meta: any = await fetchJsonFromCid(env, `${index}.json`);
@@ -165,12 +157,13 @@ async function statusByIndex(env: Env, index: number) {
     const verified = Boolean(meta.collection?.verified) || Boolean(meta.properties?.collection?.verified) || false;
     const listed = Boolean(meta.listed ?? false);
     const market = meta.market ?? "none"; // "me" | "okx" | "both" | "none"
-    return { index, minted, verified, listed, market };
+    return { index, minted, verified, listed, market, mint: meta.mint ?? null };
   } catch {
-    return { index, minted: false, verified: false, listed: false, market: "none" };
+    return { index, minted: false, verified: false, listed: false, market: "none", mint: null };
   }
 }
 
+/* ------------ Upstream Proxy (images/videos) ------------ */
 async function proxyBinaryMulti(
   env: Env,
   uris: string[],
@@ -213,6 +206,7 @@ async function proxyBinaryMulti(
   return new Response("Upstream error", { status: 502, headers: CORS });
 }
 
+/* ------------ Video mit R2 + Range ------------ */
 async function serveVideoWithR2(env: Env, index: number, q: string|undefined, clientHeaders: Headers) {
   const useR2 = !!env.R2;
   const r2Key = `video/${q||"med"}/${index}.mp4`;
@@ -250,17 +244,56 @@ async function serveVideoWithR2(env: Env, index: number, q: string|undefined, cl
   if ((upstream.ok || upstream.status === 206) && useR2) {
     const clone = upstream.clone();
     clone.arrayBuffer().then(buf => {
-      env.R2!.put(r2Key, buf, {
-        httpMetadata: { contentType: clone.headers.get("content-type") || "video/mp4" }
-      }).catch(()=>{});
+      env.R2!.put(r2Key, buf, { httpMetadata: { contentType: clone.headers.get("content-type") || "video/mp4" } })
+        .catch(()=>{});
     }).catch(()=>{});
   }
   return upstream;
 }
 
+/* ------------ Magic Eden: Verkäufe letzte 24h ------------ */
+type MESale = { mint: string; price?: number; ts: number };
+
+async function fetchMERecentSales(env: Env): Promise<{updatedAt:number; mints:string[]}> {
+  const slug = (env.ME_COLLECTION_SLUG || "inpi").toString().toLowerCase();
+  const url = `https://api-mainnet.magiceden.dev/v2/collections/${slug}/activities?types=sell&offset=0&limit=1000`;
+
+  const headers: HeadersInit = {};
+  if (env.ME_API_KEY && env.ME_API_KEY.trim()) headers["x-api-key"] = env.ME_API_KEY.trim();
+
+  const res = await fetch(url, { headers, cf:{ cacheTtl: 60 } });
+  if (!res.ok) throw new Error(`MagicEden ${res.status}`);
+  const data: MESale[] = await res.json();
+
+  const now = Date.now();
+  const DAY = 86_400_000;
+  const recent = (data || []).filter(s => now - s.ts*1000 < DAY);
+  const mints = Array.from(new Set(recent.map(s => (s.mint||"").trim()).filter(Boolean)));
+  return { updatedAt: now, mints };
+}
+
+async function getRecentSales(env: Env): Promise<{updatedAt:number; mints:string[]}> {
+  // 1) Cache aus R2 lesen
+  if (env.R2) {
+    const o = await env.R2.get("recent-sales.json");
+    if (o) {
+      try { return JSON.parse(await o.text()); } catch {}
+    }
+  }
+  // 2) Live holen + (wenn möglich) cachen
+  const fresh = await fetchMERecentSales(env);
+  if (env.R2) {
+    env.R2.put("recent-sales.json", JSON.stringify(fresh), {
+      httpMetadata: { contentType: "application/json" }
+    }).catch(()=>{});
+  }
+  return fresh;
+}
+
+/* ------------ Exportierter Worker ------------ */
 export default {
-  // Hinweis: Nur aktiv, wenn du crons in wrangler.toml setzt
   async scheduled(_event: any, env: Env, _ctx: ExecutionContext) {
+    // Prewarm die ersten 12 Reihen
     const preRows = 12;
     const jobs: Promise<any>[] = [];
     for (let row=0; row<preRows; row++) {
@@ -273,6 +306,13 @@ export default {
         jobs.push(fetch(`https://${env.PAGES_HOST}/pillary/api/video/${i}?q=med`, { method:"HEAD", headers:{ range:"bytes=0-0" }}));
       }
     }
+    // Sales-Cache aktualisieren (try/catch, darf nie cronen sprengen)
+    try {
+      const fresh = await fetchMERecentSales(env);
+      if (env.R2) await env.R2.put("recent-sales.json", JSON.stringify(fresh), {
+        httpMetadata: { contentType: "application/json" }
+      });
+    } catch {}
     await Promise.allSettled(jobs);
   },
 
@@ -282,7 +322,7 @@ export default {
 
     if (request.method === "OPTIONS") return ok({ ok: true });
 
-    // Health & reiches Config
+    // Health & config
     if (pathname.endsWith("/pillary/api/health")) return ok({ ok:true, time:Date.now() });
     if (pathname.endsWith("/pillary/api/config")) {
       const meSlug = (env.ME_COLLECTION_SLUG || env.COLLECTION_SYMBOL || "inpi").toString().trim().toLowerCase();
@@ -309,7 +349,7 @@ export default {
       });
     }
 
-    // API: Meta / Status / Batches
+    // API: meta / status / batch
     if (/\/pillary\/api\/meta\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
       try { return ok(await metaByIndex(env, idx)); }
@@ -332,13 +372,18 @@ export default {
       return ok({ from, to, data: await Promise.all(jobs) });
     }
 
-    // API: Video (Qualität + R2 + Range)
+    // API: recent-sales (aus R2-Cache, sonst live)
+    if (pathname.endsWith("/pillary/api/recent-sales")) {
+      try { return ok(await getRecentSales(env)); }
+      catch (e:any) { return ok({ updatedAt: Date.now(), mints: [], error: String(e?.message||e) }, { "cache-control":"no-store" }); }
+    }
+
+    // API: Video
     if (/\/pillary\/api\/video\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
       const q = searchParams.get("q") || "med";
       try { return await serveVideoWithR2(env, idx, q, request.headers); }
       catch {
-        // Hard-Fallback
         try {
           const meta = await metaByIndex(env, idx);
           const cands = collectMediaCandidates(env, meta, idx, q);
@@ -347,7 +392,7 @@ export default {
       }
     }
 
-    // API: Thumb (starker Cache)
+    // API: Thumb
     if (/\/pillary\/api\/thumb\/\d+$/.test(pathname)) {
       const idx = parseInt(pathname.split("/").pop()!);
       try {
@@ -366,7 +411,7 @@ export default {
       } catch { return new Response("Upstream error", { status: 502, headers: CORS }); }
     }
 
-    // SSE
+    // SSE heartbeat
     if (pathname.endsWith("/pillary/api/events")) {
       const stream = new ReadableStream({
         start: (controller) => {
@@ -387,7 +432,7 @@ export default {
       });
     }
 
-    // STATIC: /pillary* → Pages proxy
+    // STATIC Proxy zu Pages: /pillary*
     if (pathname.startsWith("/pillary") && !pathname.startsWith("/pillary/api/")) {
       const host = env.PAGES_HOST || "gallary-loader-inpinity.pages.dev";
       const targetUrl = new URL(`https://${host}${pathname.replace(/^\/pillary/, "") || "/"}`);
