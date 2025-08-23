@@ -11,7 +11,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.
 a{color:#a78bfa;text-decoration:none}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
 
-/* Topbar: kein Blur, keine Transparenz */
+/* Topbar: kein Blur/Overlay */
 .topbar{
   position:sticky;top:0;z-index:10;
   display:flex;align-items:center;gap:16px;flex-wrap:wrap;
@@ -27,6 +27,7 @@ a{color:#a78bfa;text-decoration:none}
 }
 .controls .chk{display:flex;align-items:center;gap:6px;color:#b6c2d2}
 
+/* Galerie-Viewport */
 #stageWrap{position:relative;overflow:auto;height:calc(100% - 96px)}
 #stage{transform-origin:0 0; position:relative; padding:24px; width:max-content}
 
@@ -100,7 +101,23 @@ body.show-heat .tile[data-heat]::before{
   margin-top:8px;border:0;background:#0f172a;color:#cbd5e1;border-radius:8px;padding:8px 12px;cursor:pointer
 }
 
-/* Filter (per data-attr vom JS) */
+/* Nach-der-Galerie-Inhalt */
+.page-body{
+  border-top:1px solid #1f2937;
+  background:#0b0f14;
+  padding:24px 0 40px;
+}
+.page-body__inner{
+  max-width:980px; margin:0 auto; padding:0 16px;
+}
+.meta-inline{
+  display:flex; gap:20px; flex-wrap:wrap; margin:10px 0 6px;
+}
+.donate{
+  color:#cbd5e1; margin-top:8px;
+}
+
+/* Filter (per data-attr vom JS; optional) */
 #stage[data-filter="unminted"]  .tile:not([data-status="unminted"]){ display:none }
 #stage[data-filter="minted"]    .tile[data-status="unminted"]{ display:none }
 #stage[data-filter="listed"]    .tile:not([data-status="listed"]){ display:none }
