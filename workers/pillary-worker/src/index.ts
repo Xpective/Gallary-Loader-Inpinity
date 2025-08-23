@@ -504,17 +504,31 @@ export default {
       });
     }
 
-    /* ---- Static proxy: /pillary* → Pages ---- */
-    if (pathname.startsWith("/pillary") && !pathname.startsWith("/pillary/api/")) {
-      const host = env.PAGES_HOST || "gallary-loader-inpinity.pages.dev";
-      const targetUrl = new URL(`https://${host}${pathname.replace(/^\/pillary/, "") || "/"}`);
-      targetUrl.search = url.search;
-      const resp = await fetch(targetUrl.toString(), { cf: { cacheEverything: true, cacheTtl: 300 }});
-      const out = new Response(resp.body, resp);
-      out.headers.set("cache-control", resp.headers.get("cache-control") || "public, max-age=300");
-      Object.entries(CORS).forEach(([k,v]) => out.headers.set(k, v));
-      return out;
-    }
+    // STATIC: /pillary* → Pages proxy (Default-Root = /apps)
+if (pathname.startsWith("/pillary") && !pathname.startsWith("/pillary/api/")) {
+  const host = env.PAGES_HOST || "gallary-loader-inpinity.pages.dev";
+
+  // 1) /pillary → /apps (ohne Redirect, transparentes Rewrite)
+  let sub = pathname.replace(/^\/pillary/, "");
+  if (sub === "" || sub === "/") sub = "/apps";
+
+  const targetUrl = new URL(`https://${host}${sub}`);
+  targetUrl.search = url.search;
+
+  let resp = await fetch(targetUrl.toString(), { cf: { cacheEverything: true, cacheTtl: 300 }});
+
+  // 2) SPA-/Build-Fallback: Wenn 404, erneut "/apps" laden
+  if (resp.status === 404) {
+    const fallback = new URL(`https://${host}/apps`);
+    fallback.search = url.search;
+    resp = await fetch(fallback.toString(), { cf: { cacheEverything: true, cacheTtl: 300 }});
+  }
+
+  const out = new Response(resp.body, resp);
+  out.headers.set("cache-control", resp.headers.get("cache-control") || "public, max-age=300");
+  Object.entries(CORS).forEach(([k,v]) => out.headers.set(k, v));
+  return out;
+}
 
     return notFound();
   }
