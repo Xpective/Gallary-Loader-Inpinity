@@ -11,6 +11,11 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.
 a{color:#a78bfa;text-decoration:none}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
 
+/* 24h verkauft */
+.tile[data-sold24h="1"]{
+  outline:2px solid #f59e0b;
+  box-shadow:0 0 8px 2px #fbbf24aa;
+}
 /* Topbar: kein Blur/Overlay */
 .topbar{
   position:sticky;top:0;z-index:10;
