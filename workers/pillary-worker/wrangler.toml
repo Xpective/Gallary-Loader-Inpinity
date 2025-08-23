@@ -40,6 +40,10 @@ ME_COLLECTION_SLUG = "inpi"
 COLLECTION_CERT_URL = "https://solscan.io/token/6xvwKXMUGfkqhs1f3ZN3KkrdvLh2vF3tX1pqLo9aYPrQ"
 OKX_TOKEN_URL = "https://web3.okx.com/ul/FOFXecp"
 
+# NEU: Helius
+HELIUS_API_KEY = "d95932bb-5385-4d84-ad18-7fc66e014d58"
+
+
 # --- Optional: R2-Mirror (empfohlen für Video-Turbo) ---
 # Im Dashboard einen Bucket z. B. "pillaries" anlegen und hier binden.
 # Lass die Section weg, wenn du (noch) kein R2 willst.
