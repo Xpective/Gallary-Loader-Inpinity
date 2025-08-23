@@ -24,12 +24,19 @@
       <button id="zoomOut" title="Zoom out (–)">−</button>
       <span id="zoomLevel">100%</span>
       <button id="zoomIn" title="Zoom in (+)">+</button>
-      <label class="chk" title="Alle Videos in Wellen vorladen">
-        <input id="preloadAll" type="checkbox"> alles vorladen
-      </label>
+
       <label class="chk" title="Rarity-Heatmap overlay (wenn Score vorhanden)">
         <input id="toggleRarity" type="checkbox"> Rarity-Heatmap
       </label>
+
+      <select id="filter" title="Filtern">
+        <option value="all">Alle</option>
+        <option value="unminted">Nur ungemintet</option>
+        <option value="minted">Nur gemintet</option>
+        <option value="listed">Nur gelistet</option>
+        <option value="sold24h">Verkauft (24h)</option>
+      </select>
+
       <input id="jumpTo" type="number" min="0" max="9999" placeholder="# jump" />
       <button id="jumpBtn">Go</button>
     </div>
@@ -52,7 +59,7 @@
   <script type="module" src="app.js"></script>
   <noscript>Bitte JavaScript aktivieren.</noscript>
 
-  <!-- Modal wird bei Bedarf dynamisch aufgebaut -->
+  <!-- Modal -->
   <div id="modal" class="hidden">
     <div id="modalContent" class="modal-body"></div>
     <button id="closeModal">Schließen</button>
