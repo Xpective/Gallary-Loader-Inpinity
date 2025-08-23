@@ -1,65 +1,107 @@
-:root { --bg:#0b0f14; --fg:#dfe7f1; --muted:#94a3b8; --accent:#8b5cf6; --glowG:#10b981; --glowR:#ef4444; }
+:root{
+  --bg:#0b0f14;
+  --fg:#dfe7f1;
+  --muted:#94a3b8;
+  --accent:#8b5cf6;
+  --glowG:#10b981;
+  --glowR:#ef4444;
+}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui}
 a{color:#a78bfa;text-decoration:none}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
 
-.topbar{position:sticky;top:0;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
-  padding:10px 16px;background:#0b0f14cc;backdrop-filter:blur(6px);z-index:10;border-bottom:1px solid #1f2937}
+/* Topbar: kein Blur, keine Transparenz */
+.topbar{
+  position:sticky;top:0;z-index:10;
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  padding:10px 16px;background:#0b0f14;border-bottom:1px solid #1f2937;
+  backdrop-filter:none;
+}
 .topbar h1{margin:0;font-size:16px;letter-spacing:.5px}
 .links-inline{display:flex;gap:10px;flex-wrap:wrap}
 .controls{display:flex;align-items:center;gap:8px}
-.controls button{background:#1f2937;border:1px solid #263240;color:#cbd5e1;padding:6px 10px;border-radius:6px;cursor:pointer}
+.controls button{
+  background:#1f2937;border:1px solid #263240;color:#cbd5e1;
+  padding:6px 10px;border-radius:6px;cursor:pointer
+}
 .controls .chk{display:flex;align-items:center;gap:6px;color:#b6c2d2}
 
 #stageWrap{position:relative;overflow:auto;height:calc(100% - 96px)}
-#stage{transform-origin:0 0; position:relative; padding:24px; width:max-content; }
+#stage{transform-origin:0 0; position:relative; padding:24px; width:max-content}
 
+/* Tiles performant rendern */
 .tile{
   position:absolute; width:32px; height:32px; border-radius:4px; overflow:hidden;
   background:#0f172a; border:1px solid #0b1222; box-shadow:0 0 0 1px #000 inset;
-  will-change: transform, filter, opacity;
-  transition: filter .2s ease, opacity .2s ease, box-shadow .2s ease;
+  will-change:transform,filter;
+  content-visibility:auto;
+  contain-intrinsic-size:32px 32px;
 }
-.tile video, .tile img{width:100%;height:100%;display:block;object-fit:cover;filter:saturate(1.1)}
+.tile video, .tile img{
+  width:100%;height:100%;display:block;object-fit:cover; /* keine Farbfilter */
+}
+
+/* Nummern-Badge: kein graues Overlay */
 .tile .digit{
   position:absolute; left:0; right:0; bottom:0; height:14px; font-size:11px; line-height:14px;
-  text-align:center; background:#0008; color:#e5e7eb; backdrop-filter:blur(1px); pointer-events:none;
+  text-align:center; background:transparent; color:#e5e7eb; backdrop-filter:none; pointer-events:none;
+  text-shadow:0 0 2px rgba(0,0,0,.85), 0 0 6px rgba(0,0,0,.5);
 }
 
-/* In-View hell, außerhalb gedimmt */
-.tile:not(.inview){ opacity:.25; filter: grayscale(1) brightness(.65) contrast(.95); }
-.tile.inview{ opacity:1; filter:none; }
-
-/* leichte Pseudo-Bewegung wenn Video-Limit erreicht */
-.tile.pulse img, .tile.pulse video { animation: pulseImg 1.4s ease-in-out infinite; }
-@keyframes pulseImg { 0%,100%{ filter:brightness(.92) } 50%{ filter:brightness(1) } }
-
-/* Attribute Markierungen */
-.tile.axis{ outline:1px dashed #6ee7b7; box-shadow:0 0 0 1px #064e3b inset; }
+/* Statusfarben */
+.tile.axis{ outline:1px dashed #64748b; }
 .tile.pair{ box-shadow:0 0 0 1px #334155 inset; }
 
-/* Status/Market */
-.tile[data-status="listed"]{ animation:pulse 1.6s infinite ease-in-out;
-  box-shadow:0 0 10px 1px #7f1d1d; filter:drop-shadow(0 0 5px var(--glowR)); }
-@keyframes pulse{ 0%,100%{ outline:1px solid #7f1d1d; } 50%{ outline:1px solid #ef4444; } }
-.tile[data-status="unminted"]{opacity:.45; filter:grayscale(.4)}
+.tile[data-status="listed"]{
+  animation:pulse 1.6s infinite ease-in-out;
+  box-shadow:0 0 10px 1px #7f1d1d; filter:drop-shadow(0 0 5px var(--glowR));
+}
+@keyframes pulse{ 0%,100%{ outline:1px solid #7f1d1d } 50%{ outline:1px solid #ef4444 } }
+
+/* Unminted NICHT abdunkeln */
+.tile[data-status="unminted"]{ opacity:1; filter:none }
+
+/* Verified: sanfter Glow */
 .tile[data-status="verified"]::after{
   content:""; position:absolute; inset:-2px; border-radius:6px; pointer-events:none;
   box-shadow:0 0 10px 2px #10b981aa;
 }
-.tile.failed{ opacity:.6; filter:grayscale(.7) contrast(.9); }
 
-/* Rarity-Heat Overlay */
-.tile[data-heat]::before{
+/* Rarity-Heatmap nur wenn body.show-heat aktiv */
+.tile[data-heat]{ position:relative }
+body.show-heat .tile[data-heat]::before{
   content:""; position:absolute; inset:0; pointer-events:none; mix-blend-mode:overlay;
-  background: linear-gradient(0deg, rgba(255,0,0,var(--heat,0)) 0%, rgba(0,0,0,0) 100%);
+  background:linear-gradient(0deg, rgba(255,0,0,var(--heat,0)) 0%, rgba(0,0,0,0) 100%);
 }
 
-#modal{position:fixed; inset:0; display:none; place-items:center; background:#0008; z-index:9999}
-#modal:not(.hidden){display:grid}
-#modal .modal-body{background:#0b1220;border:1px solid #1e293b;border-radius:12px; width:min(680px,90vw); max-height:90vh; overflow:auto; padding:16px}
-#closeModal{margin-top:10px;border:0;background:#1f2937;color:#cbd5e1;border-radius:8px;padding:8px 12px;cursor:pointer}
+/* Tier-Glows */
+.tile[data-tier="legendary"]{ box-shadow:0 0 8px 2px gold }
+.tile[data-tier="epic"]     { box-shadow:0 0 8px 2px #a855f7 }
+.tile[data-tier="rare"]     { box-shadow:0 0 8px 2px #3b82f6 }
 
-.foot{padding:10px 16px;border-top:1px solid #1f2937;color:#9fb6d1;background:#0b0f14cc}
-.foot .donate{margin-top:6px;color:#b6c2d2}
+/* 24h verkauft */
+.tile[data-sold24h="1"]{
+  outline:2px solid #f59e0b;
+  box-shadow:0 0 8px 2px #fbbf24aa;
+}
+
+/* „Wartet auf Video-Slot“ dezent */
+.tile.pulse{ outline:1px dashed #3b82f6 }
+
+/* Modal */
+#modal{position:fixed;inset:0;background:#0008;display:grid;place-items:center}
+#modal.hidden{display:none}
+.modal-body{
+  background:#0b1220;border:1px solid #1e293b;border-radius:12px;
+  width:min(680px,90vw); max-height:90vh; overflow:auto; padding:16px
+}
+#closeModal{
+  margin-top:8px;border:0;background:#0f172a;color:#cbd5e1;border-radius:8px;padding:8px 12px;cursor:pointer
+}
+
+/* Filter (per data-attr vom JS) */
+#stage[data-filter="unminted"]  .tile:not([data-status="unminted"]){ display:none }
+#stage[data-filter="minted"]    .tile[data-status="unminted"]{ display:none }
+#stage[data-filter="listed"]    .tile:not([data-status="listed"]){ display:none }
+#stage[data-filter="sold24h"]   .tile:not([data-sold24h="1"]){ display:none }
