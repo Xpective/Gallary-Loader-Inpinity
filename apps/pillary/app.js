@@ -1,36 +1,41 @@
 /* ===========================================
-   Pi Pillary – zentrale Zahlen-Pyramide (Cheops-Stil)
-   mit Virtualisierung + Lazy-Video + Rarity-Glow
-   + Mobile: PNG bevorzugen & Anim-Toggle
+   Pi Pillary – Virtual Grid + Lazy Video + Rarity
+   Ressourcen-freundlich + Overlay-frei
    =========================================== */
 
 /* ========= CONFIG ========= */
 const CFG = {
-  API: "https://inpinity.online/pillary/api", // oder "/pillary/api" wenn unter eigener Domain
+  API: "https://inpinity.online/pillary/api", // oder "/pillary/api"
   ROWS: 100,
   TILE: 32,
   GAP: 4,
-  PRELOAD_CONCURRENCY: 4,
-  SCALE_IMG_THRESHOLD: 0.7,
+  PRELOAD_CONCURRENCY: 3,     // kleiner gehalten
+  SCALE_IMG_THRESHOLD: 0.8,   // etwas höher → weniger Autovideos
   INITIAL_ROWS_VISIBLE: 10
 };
 
-// Virtualisierung: wie viele Reihen ober/unter View halten
-const RENDER_MARGIN_ROWS = 6;
+// runtime-Optimierungen (Mobile = konservativer)
+const ua = navigator.userAgent || "";
+const isMobile = /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(ua) || navigator.userAgentData?.mobile === true;
+const lowPower = !!(navigator.connection?.saveData) || /(^|-)2g$/.test(navigator.connection?.effectiveType || "");
+const RENDER_MARGIN_ROWS = isMobile ? 3 : 6; // kleinerer Sichtpuffer
 
 /* ========= POLYFILLS ========= */
 window.requestIdleCallback ||= (cb)=> setTimeout(()=>cb({didTimeout:false,timeRemaining:()=>0}), 1);
 window.cancelIdleCallback ||= (id)=> clearTimeout(id);
 
-/* ========= Helpers ========= */
-const ua = navigator.userAgent || "";
-function isMobileUA(){
-  return /Mobi|Android|iPhone|iPad|iPod|Windows Phone/i.test(ua) || navigator.userAgentData?.mobile === true;
-}
-function isLowPowerNet(){
-  const c = navigator.connection || {};
-  return !!c.saveData || /(^|-)2g$/.test(c.effectiveType || "");
-}
+/* ========= OVERLAY-FREE TWEAKS (ohne CSS-Datei anfassen) ========= */
+(() => {
+  const s = document.createElement("style");
+  s.textContent = `
+    .topbar{background:#0b0f14!important;backdrop-filter:none!important}
+    .tile .digit{background:transparent!important;text-shadow:0 0 2px rgba(0,0,0,.85),0 0 6px rgba(0,0,0,.5)}
+  `;
+  document.head.appendChild(s);
+  // Unmint-Dimmung abschalten (NFTs „wie sie sind“)
+  document.documentElement.style.setProperty('--unmint-opacity','1');
+  document.documentElement.style.setProperty('--unmint-gray','0');
+})();
 
 /* ========= DOM ========= */
 function reqEl(id){ const el = document.getElementById(id); if(!el) throw new Error(`#${id} fehlt`); return el; }
@@ -42,45 +47,89 @@ const zoomOutBtn = reqEl("zoomOut");
 const zoomLevel = reqEl("zoomLevel");
 const preloadAllChk = reqEl("preloadAll");
 const toggleRarity = reqEl("toggleRarity");
-const toggleAnim = reqEl("toggleAnim");
 const jumpTo = reqEl("jumpTo");
 const jumpBtn = reqEl("jumpBtn");
 const modal = reqEl("modal");
 const modalContent = reqEl("modalContent");
 const closeModalBtn = reqEl("closeModal");
 
+// Falls vorhanden (neuere HTML-Version), Animations-Toggle
+const toggleAnim = document.getElementById("toggleAnim");
+
 /* ========= STATE ========= */
 let scale = 1;
 let focusedIndex = 0;
 let userInteracted = false;
 const TOTAL = CFG.ROWS * CFG.ROWS;
-const MAX_PLAYING = 32;
+const MAX_PLAYING = 24; // leicht reduziert
 const playing = new Set();
 const renderedRows = new Set();
 
-/* Animationen (Videos) global toggelbar + persistent */
+// Gesehene Metadaten/Status, um Re-fetch zu sparen
+const metaLoaded = new Set();
+const statusLoaded = new Set();
+
+/* ========= GLOBAL ANIM TOGGLE ========= */
 const storedAnim = localStorage.getItem("pillary-anim");
 const ANIM = {
   // Mobile & LowPower default: AUS; Desktop default: AN
-  enabled: storedAnim !== null ? JSON.parse(storedAnim) : !(isMobileUA() || isLowPowerNet()),
+  enabled: storedAnim !== null ? JSON.parse(storedAnim) : !(isMobile || lowPower),
 };
-toggleAnim.checked = !!ANIM.enabled;
-toggleAnim.addEventListener("change", ()=>{
-  ANIM.enabled = toggleAnim.checked;
-  localStorage.setItem("pillary-anim", JSON.stringify(ANIM.enabled));
-  // Sofort umschalten, ohne Scroll nötig
-  refreshVisibleMedia();
-  // Preload-All nur sinnvoll, wenn Animationen an
-  if (!ANIM.enabled) preloadAllChk.checked = false;
-});
+if (toggleAnim) {
+  toggleAnim.checked = !!ANIM.enabled;
+  toggleAnim.addEventListener("change", ()=>{
+    ANIM.enabled = toggleAnim.checked;
+    localStorage.setItem("pillary-anim", JSON.stringify(ANIM.enabled));
+    if (!ANIM.enabled) preloadAllChk.checked = false;
+    refreshVisibleMedia();
+  });
+}
 
-/* ========= API ========= */
-async function apiGet(p){ const r = await fetch(`${CFG.API}${p}`); if(!r.ok) throw new Error(`API ${p} -> ${r.status}`); return r.json(); }
+/* ========= API – Queue + Dedupe ========= */
+function apiUrl(p){ return `${CFG.API}${p}`; }
+
+const RequestQueue = (()=> {
+  const MAX_CONC = 3;
+  let running = 0;
+  const q = [];
+  const inflight = new Map(); // key -> Promise
+
+  const runNext = () => {
+    if (running >= MAX_CONC || q.length === 0) return;
+    const job = q.shift();
+    if (!job) return;
+    running++;
+    job.fn().then(job.resolve, job.reject).finally(()=>{ running--; runNext(); });
+  };
+
+  function schedule(key, fn){
+    if (inflight.has(key)) return inflight.get(key);
+    const p = new Promise((resolve,reject)=>{
+      q.push({ fn, resolve, reject });
+      runNext();
+    });
+    inflight.set(key, p);
+    p.finally(()=> inflight.delete(key));
+    return p;
+  }
+
+  return { schedule };
+})();
+
+async function apiGetThrottled(path){
+  const key = `GET ${path}`;
+  return RequestQueue.schedule(key, async ()=> {
+    const r = await fetch(apiUrl(path));
+    if (!r.ok) throw new Error(`${path} -> ${r.status}`);
+    return r.json();
+  });
+}
 
 /* ========= UTIL ========= */
 function tile(i){ return stage.querySelector(`.tile[data-index="${i}"]`); }
+
 function videoTier(){
-  if (!ANIM.enabled) return "med"; // irrelevant wenn ANIM=false (Video wird gar nicht erstellt)
+  if (!ANIM.enabled) return "med";
   const net = navigator.connection?.effectiveType || '';
   if (/2g|slow-2g/.test(net)) return "low";
   if (scale < 0.5) return "low";
@@ -88,6 +137,7 @@ function videoTier(){
   return "high";
 }
 function videoUrl(i){ return `${CFG.API}/video/${i}?q=${videoTier()}`; }
+
 function showModal(html){ modalContent.innerHTML = html; modal.classList.remove("hidden"); }
 closeModalBtn.onclick = () => modal.classList.add("hidden");
 
@@ -95,7 +145,7 @@ closeModalBtn.onclick = () => modal.classList.add("hidden");
 function layoutFrameOnly(){
   const unit = CFG.TILE + CFG.GAP;
   const maxCols = 2*(CFG.ROWS - 1) + 1;
-  stage.style.width = (maxCols * unit - CFG.GAP) + "px";
+  stage.style.width  = (maxCols * unit - CFG.GAP) + "px";
   stage.style.height = (unit * CFG.ROWS - CFG.GAP) + "px";
 }
 
@@ -128,7 +178,7 @@ function createRow(row){
     el.addEventListener("click", onTileClick);
     el.addEventListener("keydown", (e)=>{ if (e.key === "Enter") onTileClick({ currentTarget: el }); });
 
-    // Start: immer Bild (mobil-schonend)
+    // Start: immer Bild (schont Ressourcen)
     const img = document.createElement("img");
     img.alt = `#${index}`;
     img.src = `${CFG.API}/thumb/${index}`;
@@ -145,13 +195,6 @@ function createRow(row){
     x += unit;
   }
   stage.appendChild(frag);
-
-  // Direkt Meta/Status für diese Reihe anstoßen
-  const from = rowStartIndex;
-  const to   = from + cols - 1;
-  loadMetaBatch(from, to).catch(()=>{});
-  loadStatusBatch(from, to).catch(()=>{});
-
   renderedRows.add(row);
 }
 
@@ -168,7 +211,10 @@ function destroyRow(row){
   renderedRows.delete(row);
 }
 
-/* ========= Sichtbare Reihen aktualisieren ========= */
+/* ========= Viewport-Update mit gebündelten Batch-Loads ========= */
+let lastViewportBatch = 0;
+let batchTimer = 0;
+
 function updateRenderedRows(){
   const unit = CFG.TILE + CFG.GAP;
   const y = stageWrap.scrollTop / (scale || 1);
@@ -179,6 +225,43 @@ function updateRenderedRows(){
   for (const r of [...renderedRows]) if (r < topRow-1 || r > bottomRow+1) destroyRow(r);
 
   visibleSwap();
+
+  // nach kurzem Debounce den gesamten Sichtbereich als EINEN Batch laden
+  clearTimeout(batchTimer);
+  batchTimer = setTimeout(()=> queueViewportBatch(topRow, bottomRow), 80);
+}
+
+function queueViewportBatch(topRow, bottomRow){
+  // Limit: nicht öfter als alle 120ms
+  const now = Date.now();
+  if (now - lastViewportBatch < 120) return;
+  lastViewportBatch = now;
+
+  const from = topRow*topRow;
+  const to   = bottomRow*bottomRow + (2*bottomRow + 1) - 1;
+
+  // Shrink auf noch nicht geladene Indexbereiche
+  const rangeMeta   = shrinkRange(from, to, metaLoaded);
+  const rangeStatus = shrinkRange(from, to, statusLoaded);
+
+  if (rangeMeta)   loadMetaBatch(rangeMeta.from,   rangeMeta.to);
+  if (rangeStatus) loadStatusBatch(rangeStatus.from, rangeStatus.to);
+}
+
+function shrinkRange(from, to, loadedSet){
+  let a = from, b = to;
+  // außen abschneiden
+  while (a <= b && loadedSet.has(a)) a++;
+  while (b >= a && loadedSet.has(b)) b--;
+  if (a > b) return null;
+
+  // innen grob prüfen: wenn >85% bereits geladen, kann man skippen
+  let known = 0;
+  for (let i=a; i<=b; i++) if (loadedSet.has(i)) known++;
+  const total = b - a + 1;
+  if (total > 40 && known/total > 0.85) return null;
+
+  return { from:a, to:b };
 }
 
 /* ========= Mediensteuerung ========= */
@@ -197,7 +280,6 @@ function toggleTileMedia(el, isVisible){
   const idx = parseInt(el.dataset.index);
   if (el.classList.contains("failed")) return;
 
-  // Wenn Animationen aus → immer Bild
   const wantVideo = ANIM.enabled && isVisible && scale >= CFG.SCALE_IMG_THRESHOLD;
   const hasVideo = !!el.querySelector("video");
 
@@ -217,11 +299,10 @@ function toggleTileMedia(el, isVisible){
     img.onerror = ()=> el.classList.add("failed");
     const old = el.firstChild; if (old) el.removeChild(old);
     el.prepend(img);
-    el.classList.add("pulse"); // zeigt: wartet auf Video-Slot (falls später an)
+    el.classList.add("pulse"); // zeigt: wartet ggf. auf späteren Videoslot
   }
 }
 
-/* Alle sichtbaren Tiles an Vorgabe (Anim on/off) anpassen */
 function refreshVisibleMedia(){
   const wrapRect = stageWrap.getBoundingClientRect();
   for (const el of stage.children) {
@@ -292,28 +373,17 @@ function setInitialView(){
   });
 }
 
-/* ========= Controls ========= */
-zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); visibleSwap(); };
-zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); visibleSwap(); };
-
-stageWrap.addEventListener("wheel", (e)=>{
-  if (!e.ctrlKey) return; e.preventDefault();
-  userInteracted = true;
-  setScale(scale + (e.deltaY < 0 ? .1 : -.1));
-  visibleSwap();
-}, { passive: false });
-
-["scroll","keydown","pointerdown","touchstart"].forEach(evt=>{
-  window.addEventListener(evt, ()=> userInteracted = true, { passive:true });
-});
-
-/* ========= Meta/Status + Rarity ========= */
+/* ========= Meta/Status (Batch) ========= */
 async function loadMetaBatch(from, to){
   try{
-    const { data } = await apiGet(`/batch/meta?from=${from}&to=${to}`);
+    const path = `/batch/meta?from=${from}&to=${to}`;
+    const { data } = await apiGetThrottled(path);
+
     data.forEach(meta=>{
       if (!meta || meta.error) return;
       const i = meta.index;
+      metaLoaded.add(i);
+
       const el = tile(i);
       if (!el) return;
       const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
@@ -339,18 +409,24 @@ async function loadMetaBatch(from, to){
         el.setAttribute("data-heat","1");
       }
     });
-  }catch{}
+  }catch{/* still */}
 }
 
 async function loadStatusBatch(from, to){
   try{
-    const { data } = await apiGet(`/batch/status?from=${from}&to=${to}`);
+    const path = `/batch/status?from=${from}&to=${to}`;
+    const { data } = await apiGetThrottled(path);
+
     data.forEach(s=>{
-      const el = tile(s.index);
+      const i = s.index;
+      statusLoaded.add(i);
+
+      const el = tile(i);
       if (!el) return;
       if (!s.minted) el.dataset.status = "unminted";
       else if (s.listed) el.dataset.status = "listed";
       else if (s.verified) el.dataset.status = "verified";
+
       if (s.market && s.market !== "none") {
         el.dataset.market = s.market;
         const t = el.getAttribute("title") || `#${s.index}`;
@@ -358,7 +434,7 @@ async function loadStatusBatch(from, to){
         el.title = `${t} — listed on ${marketTxt}`;
       } else el.dataset.market = "none";
     });
-  }catch{}
+  }catch{/* still */}
 }
 
 /* ========= Modal ========= */
@@ -368,7 +444,7 @@ async function onTileClick(e){
     const idx = parseInt(el.dataset.index);
     focusedIndex = idx;
 
-    const meta = await apiGet(`/meta/${idx}`);
+    const meta = await apiGetThrottled(`/meta/${idx}`);
     const links = meta.links || {};
     const attrs = Array.isArray(meta.attributes) ? meta.attributes : [];
 
@@ -393,20 +469,20 @@ async function onTileClick(e){
       ["Rarity Score", rarityScore ?? ""],
     ].map(([k,v])=> `<div class="meta-row"><b>${k}</b><div>${(v||"").toString()}</div></div>`).join("");
 
+    const mediaHtml = (ANIM.enabled)
+      ? `<video src="${videoUrl(idx)}" controls muted playsinline loop preload="metadata"
+                poster="${CFG.API}/thumb/${idx}"
+                style="width:100%;margin-top:8px;border-radius:8px"></video>`
+      : `<img src="${CFG.API}/thumb/${idx}" alt="#${idx}" style="width:100%;margin-top:8px;border-radius:8px" />`;
+
     const linkHtml = `
-      <div class="links">
+      <div class="links" style="margin-top:8px;display:flex;gap:10px;flex-wrap:wrap">
         ${meta.mint ? `<a target="_blank" href="${links.magicEdenItem}">Kaufen @ Magic Eden</a>` : ""}
         ${meta.mint ? `<a target="_blank" href="${links.okxNftItem}">Kaufen @ OKX</a>` : ""}
         <a target="_blank" href="https://magiceden.io/marketplace/inpi">Collection @ Magic Eden</a>
         <a target="_blank" href="https://web3.okx.com/ul/FOFXecp">Token @ OKX</a>
         <a target="_blank" href="https://solscan.io/account/GEFoNLncuhh4nH99GKvVEUxe59SGe74dbLG7UUtfHrCp">Creator</a>
       </div>`;
-
-    const mediaHtml = ANIM.enabled
-      ? `<video src="${videoUrl(idx)}" controls muted playsinline loop preload="metadata"
-                poster="${CFG.API}/thumb/${idx}"
-                style="width:100%;margin-top:8px;border-radius:8px"></video>`
-      : `<img src="${CFG.API}/thumb/${idx}" alt="#${idx}" style="width:100%;margin-top:8px;border-radius:8px" />`;
 
     showModal(`
       <h3>${meta.name ?? "Item"} — #${idx}</h3>
@@ -453,23 +529,36 @@ stageWrap.addEventListener("scroll", ()=> {
 
   updateRenderedRows();
 
-  // Prefetch eine Reihe voraus (idle)
+  // Prefetch eine Reihe voraus (idle, aber via Queue)
   requestIdleCallback(async ()=> {
     const unit = CFG.TILE + CFG.GAP;
     const row = Math.floor(y / unit) + 1;
     if (row >= 0 && row < CFG.ROWS) {
       const from = row*row;
       const to   = from + (2*row + 1) - 1;
-      try{
-        await Promise.all([
-          apiGet(`/batch/meta?from=${from}&to=${to}`),
-          apiGet(`/batch/status?from=${from}&to=${to}`)
-        ]);
-      }catch{}
+      const rM = shrinkRange(from, to, metaLoaded);
+      const rS = shrinkRange(from, to, statusLoaded);
+      if (rM) loadMetaBatch(rM.from, rM.to);
+      if (rS) loadStatusBatch(rS.from, rS.to);
     }
   }, { timeout: 1200 });
 
 }, { passive:true });
+
+/* ========= Controls ========= */
+zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); visibleSwap(); };
+zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); visibleSwap(); };
+
+stageWrap.addEventListener("wheel", (e)=>{
+  if (!e.ctrlKey) return; e.preventDefault();
+  userInteracted = true;
+  setScale(scale + (e.deltaY < 0 ? .1 : -.1));
+  visibleSwap();
+}, { passive: false });
+
+["scroll","keydown","pointerdown","touchstart"].forEach(evt=>{
+  window.addEventListener(evt, ()=> userInteracted = true, { passive:true });
+});
 
 /* ========= Navigation ========= */
 function scrollToIndex(i, open = false){
@@ -506,13 +595,15 @@ function connectEvents(){
   requestAnimationFrame(setInitialView);
   connectEvents();
 
-  // Erstmal nur die ersten ~12 Reihen synchronisieren (perceived speed)
-  const top = 12;
+  // Anfangs nur Top-Reihen bündeln (eine große Batch statt viele kleine)
+  const top = isMobile ? 8 : 12;
   const lastTop = top*top + (2*top+1) - 1;
   (async ()=>{
+    const rM = shrinkRange(0, lastTop, metaLoaded);
+    const rS = shrinkRange(0, lastTop, statusLoaded);
     await Promise.all([
-      apiGet(`/batch/meta?from=0&to=${lastTop}`),
-      apiGet(`/batch/status?from=0&to=${lastTop}`)
+      rM ? loadMetaBatch(rM.from, rM.to) : Promise.resolve(),
+      rS ? loadStatusBatch(rS.from, rS.to) : Promise.resolve()
     ]).catch(()=>{});
     updateRenderedRows();
   })();
