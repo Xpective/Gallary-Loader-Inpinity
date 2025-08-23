@@ -66,6 +66,42 @@ body.show-heat .tile[data-heat]::before{
   box-shadow:0 0 8px 2px #fbbf24aa;
 }
 
+/* ===== Overlay-frei + klare Darstellung ===== */
+
+/* Topbar ohne Transparenz/Blur */
+.topbar{
+  background:#0b0f14 !important;
+  backdrop-filter:none !important;
+}
+
+/* Zahlen-Badge ohne graues Overlay; gut lesbar via Textschatten */
+.tile .digit{
+  background:transparent !important;
+  text-shadow:0 0 2px rgba(0,0,0,.85), 0 0 6px rgba(0,0,0,.5);
+}
+
+/* Unminted NICHT dimmen – alles „wie es ist“ zeigen */
+.tile[data-status="unminted"]{
+  opacity:1 !important;
+  filter:none !important;
+}
+
+/* „Wartet auf Video-Slot“ dezent */
+.tile.pulse{ outline:1px dashed #3b82f6; }
+
+/* Rarity-Overlay nur wirken lassen, wenn JS data-heat setzt
+   (app.js setzt data-heat nur wenn die Heatmap-Checkbox aktiv ist) */
+.tile[data-heat]::before{
+  mix-blend-mode:overlay;
+}
+
+/* (Optional) leichte Kantenkosmetik */
+.tile{
+  background:#0f172a;
+  border:1px solid #0b1222;
+  box-shadow:0 0 0 1px #000 inset;
+}
+
 /* Modal */
 #modal{position:fixed;inset:0;background:#0008;display:grid;place-items:center}
 #modal.hidden{display:none}
