@@ -1,6 +1,6 @@
 /* ===========================================
    Pi Pillary – Virtual Grid + Lazy Video + Rarity
-   Animation-Toggle: echte Umschaltung auf PNG/Video
+   Animation-Toggle: echte Umschaltung PNG <-> Video
    =========================================== */
 
 /* ========= CONFIG ========= */
@@ -38,7 +38,7 @@ const jumpBtn = reqEl("jumpBtn");
 const modal = reqEl("modal");
 const modalContent = reqEl("modalContent");
 const closeModalBtn = reqEl("closeModal");
-const toggleAnim = document.getElementById("toggleAnim"); // optionaler Schalter in der Topbar
+const toggleAnim = document.getElementById("toggleAnim"); // (optional) <input type="checkbox" id="toggleAnim">
 
 /* ========= STATE ========= */
 let scale = 1;
@@ -53,19 +53,12 @@ const statusLoaded = new Set();
 
 /* ========= GLOBAL ANIM TOGGLE ========= */
 const storedAnim = localStorage.getItem("pillary-anim");
-const ANIM = {
-  enabled: storedAnim !== null ? JSON.parse(storedAnim) : !(isMobile || lowPower), // Mobile/LowPower: aus
-};
-if (toggleAnim) {
-  toggleAnim.checked = !!ANIM.enabled;
-}
-// --- WALLET (nur Phantom, minimal) ---
-const wallet = {
-  pubkey: null,
-  get connected(){ return !!this.pubkey; }
-};
+const ANIM = { enabled: storedAnim !== null ? JSON.parse(storedAnim) : !(isMobile || lowPower) };
+if (toggleAnim) toggleAnim.checked = !!ANIM.enabled;
 
-const walletBtn = document.getElementById("walletBtn");
+/* ========= WALLET (Phantom minimal) ========= */
+const wallet = { pubkey: null, get connected(){ return !!this.pubkey; } };
+const walletBtn = document.getElementById("walletBtn"); // (optional) <button id="walletBtn">Connect Wallet</button>
 function updateWalletBtn(){
   if (!walletBtn) return;
   walletBtn.textContent = wallet.connected
@@ -76,22 +69,14 @@ function updateWalletBtn(){
 async function connectWallet(){
   try{
     const p = window.solana;
-    if (!p || !p.isPhantom) {
-      window.open("https://phantom.app/download", "_blank", "noopener");
-      return;
-    }
+    if (!p || !p.isPhantom) { window.open("https://phantom.app/download", "_blank", "noopener"); return; }
     const res = await p.connect({ onlyIfTrusted:false });
     wallet.pubkey = res?.publicKey?.toString() || null;
-  }catch(e){ /* user rejected */ }
+  }catch{}
   updateWalletBtn();
 }
-async function disconnectWallet(){
-  try{ await window.solana?.disconnect?.(); }catch{}
-  wallet.pubkey = null; updateWalletBtn();
-}
-walletBtn?.addEventListener("click", ()=>{
-  if (wallet.connected) disconnectWallet(); else connectWallet();
-});
+async function disconnectWallet(){ try{ await window.solana?.disconnect?.(); }catch{} wallet.pubkey = null; updateWalletBtn(); }
+walletBtn?.addEventListener("click", ()=>{ wallet.connected ? disconnectWallet() : connectWallet(); });
 updateWalletBtn();
 
 /* ========= API – Throttle Queue ========= */
@@ -147,7 +132,7 @@ function makeVideo(idx, posterUrl){
   return v;
 }
 function videoTier(){
-  if (!ANIM.enabled) return "med"; // egal, es wird eh kein Video erzeugt
+  if (!ANIM.enabled) return "med"; // egal, Video wird bei AUS nicht erzeugt
   const net = navigator.connection?.effectiveType || '';
   if (/2g|slow-2g/.test(net)) return "low";
   if (scale < 0.5) return "low";
@@ -284,11 +269,11 @@ function toggleTileMedia(el, isVisible){
   } else if (!wantVideo && hasVideo) {
     const img = makeImg(idx);
     const old = el.firstChild; if (old) {
-      try { const vid = old; if (vid.pause) vid.pause(); } catch {}
+      try { old.pause?.(); } catch {}
       el.removeChild(old);
     }
     el.prepend(img);
-    el.classList.add("pulse"); // zeigt: evtl. später wieder Video
+    el.classList.add("pulse");
   }
 }
 function refreshVisibleMedia(){
@@ -306,19 +291,16 @@ function setAnimation(on){
   ANIM.enabled = on;
   localStorage.setItem("pillary-anim", JSON.stringify(ANIM.enabled));
   if (!ANIM.enabled) {
-    // Preload deaktivieren und ALLE Videos sofort zu PNG konvertieren
     preloadAllChk.checked = false;
     const vids = stage.querySelectorAll(".tile video");
     vids.forEach(v=>{
       try { v.pause(); } catch {}
-      const el = v.parentElement;
-      if (!el) return;
+      const el = v.parentElement; if (!el) return;
       const idx = parseInt(el.dataset.index);
       const img = makeImg(idx);
       el.replaceChild(img, v);
     });
   } else {
-    // Beim Aktivieren nur sichtbare Tiles in Video wandeln
     refreshVisibleMedia();
   }
 }
@@ -449,7 +431,6 @@ async function onTileClick(e){
     const idx = parseInt(el.dataset.index);
     focusedIndex = idx;
 
-    // Meta + Status laden
     const [meta, status] = await Promise.all([
       apiGetThrottled(`/meta/${idx}`),
       apiGetThrottled(`/status/${idx}`)
@@ -467,40 +448,29 @@ async function onTileClick(e){
     const axis  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "axis")?.value);
     const pair  = (attrs.find(a => (a.trait_type||"").toLowerCase() === "matchingpair")?.value);
 
-    // ---- Market-CTAs (nur wenn gelistet) ----
     const ctas = [];
     const mint = meta.mint || "";
-    // Magic Eden
     if (status.listed && (status.market === "me" || status.market === "both")) {
       const meUrl = links.magicEdenItem || `https://magiceden.io/item-details/${mint}`;
       ctas.push(`<a class="btn" target="_blank" rel="noopener" href="${meUrl}">Buy on Magic Eden</a>`);
     }
-    // OKX
     if (status.listed && (status.market === "okx" || status.market === "both")) {
       const okxUrl = links.okxNftItem || `https://www.okx.com/web3/market/nft/sol/${mint}`;
       ctas.push(`<a class="btn" target="_blank" rel="noopener" href="${okxUrl}">Buy on OKX</a>`);
     }
-    // Optional: Tensor als Fallback-Link
     if (mint) {
       ctas.push(`<a class="btn subtle" target="_blank" rel="noopener" href="https://www.tensor.trade/item/${mint}">View on Tensor</a>`);
-    }
-    // Immer nützlich:
-    if (mint) {
       ctas.push(`<a class="btn subtle" target="_blank" rel="noopener" href="https://solscan.io/token/${mint}">Solscan</a>`);
-      ctas.push(`<button class="btn subtle" onclick="navigator.clipboard.writeText('${mint}').catch(()=>{})">Copy Mint</button>`);
+      ctas.push(`<button class="btn subtle" onclick="navigator.clipboard.writeText('${mint}').catch(()=>{})">Mint kopieren</button>`);
     }
-    const ctasHtml = ctas.length
-      ? `<div class="cta-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${ctas.join("")}</div>`
-      : `<div class="cta-row" style="margin-top:8px;color:#9fb6d1">Kein Listing gefunden.</div>`;
+    const ctasHtml = `<div class="cta-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${ctas.join("") || '<span style="color:#9fb6d1">Kein Listing gefunden.</span>'}</div>`;
 
-    // ---- Medien (Video nur wenn ANIM.enabled) ----
     const mediaHtml = (ANIM.enabled)
       ? `<video src="${videoUrl(idx)}" controls muted playsinline loop preload="metadata"
                 poster="${CFG.API}/thumb/${idx}"
                 style="width:100%;margin-top:8px;border-radius:8px"></video>`
       : `<img src="${CFG.API}/thumb/${idx}" alt="#${idx}" style="width:100%;margin-top:8px;border-radius:8px" />`;
 
-    // ---- Metatabelle ----
     const rows = [
       ["Index", `#${idx}`],
       ["Name", meta.name || ""],
@@ -547,7 +517,7 @@ async function preloadAllVideos(){
       }catch{ el.classList.add("failed"); }
     }
   }
-  await Promise.all(Array.from({ length: conc }, worker));
+  await Promise.all(Array.from({ length: conc }, ()=>worker()));
 }
 preloadAllChk.addEventListener("change", ()=>{ if (preloadAllChk.checked) preloadAllVideos(); });
 
@@ -577,14 +547,12 @@ stageWrap.addEventListener("scroll", ()=> {
 /* ========= Controls ========= */
 zoomInBtn.onclick  = () => { userInteracted = true; setScale(scale + .1); visibleSwap(); };
 zoomOutBtn.onclick = () => { userInteracted = true; setScale(scale - .1); visibleSwap(); };
-
 stageWrap.addEventListener("wheel", (e)=>{
   if (!e.ctrlKey) return; e.preventDefault();
   userInteracted = true;
   setScale(scale + (e.deltaY < 0 ? .1 : -.1));
   visibleSwap();
 }, { passive: false });
-
 ["scroll","keydown","pointerdown","touchstart"].forEach(evt=>{
   window.addEventListener(evt, ()=> userInteracted = true, { passive:true });
 });
@@ -601,7 +569,7 @@ jumpBtn.onclick = () => {
   if (Number.isFinite(i) && i >= 0 && i < TOTAL) { userInteracted = true; scrollToIndex(i, false); }
 };
 
-/* ========= Rarity-Heatmap Toggle (Checkbox) ========= */
+/* ========= Rarity-Heatmap Toggle ========= */
 if (toggleRarity) {
   toggleRarity.addEventListener("change", ()=>{
     document.body.classList.toggle("show-heat", toggleRarity.checked);
@@ -609,12 +577,21 @@ if (toggleRarity) {
   });
 }
 
-/* ========= Animations-Schalter verdrahten ========= */
+/* ========= Animations-Schalter ========= */
 if (toggleAnim) {
   toggleAnim.addEventListener("change", ()=>{
     setAnimation(toggleAnim.checked);
   });
 }
+
+/* ========= Tab Visibility: Videos pausieren ========= */
+document.addEventListener("visibilitychange", ()=>{
+  if (document.hidden) {
+    for (const v of playing) { try{ v.pause(); }catch{} }
+  } else if (ANIM.enabled) {
+    refreshVisibleMedia();
+  }
+});
 
 /* ========= SSE ========= */
 function connectEvents(){
@@ -628,13 +605,13 @@ function connectEvents(){
 (function boot(){
   layoutFrameOnly();
 
-  // Initiale Animations-Politik sofort durchsetzen:
-  setAnimation(ANIM.enabled); // sorgt ggf. für PNG-only Start
+  // Initiale Animations-Politik sofort durchsetzen (PNG-only auf Mobile/LowPower)
+  setAnimation(ANIM.enabled);
 
   requestAnimationFrame(setInitialView);
   connectEvents();
 
-  // Anfangs ein größerer Batch (Top-Reihen)
+  // Anfangs größerer Batch (Top-Reihen)
   const top = isMobile ? 8 : 12;
   const lastTop = top*top + (2*top+1) - 1;
   (async ()=>{
